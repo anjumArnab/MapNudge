@@ -15,7 +15,6 @@ class MapNudge extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'MapNudge',
       theme: ThemeData(textTheme: GoogleFonts.poppinsTextTheme()),
-
       home: CoordinateView(),
     );
   }
