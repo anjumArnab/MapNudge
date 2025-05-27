@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -35,7 +36,30 @@ class _MapViewState extends State<MapView> {
         'autoConnect': true,
       });
       socket.connect();
-      socket.on("position-change", (data) => {});
+      socket.on("position-change", (data) async {
+        var latLng = jsonDecode(data);
+        final GoogleMapController controller = await _controller.future;
+        controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: LatLng(latLng["lat"], latLng["lng"]),
+              zoom: 13,
+            ),
+          ),
+        );
+        var image = await BitmapDescriptor.fromAssetImage(
+          ImageConfiguration(),
+          "assests/destination.jpg",
+        );
+        Marker marker = Marker(
+          markerId: MarkerId("ID"),
+          icon: image,
+          position: LatLng(latLng["lat"], latLng["lng"]),
+        );
+        setState(() {
+          _markers[MarkerId("ID")] = marker;
+        });
+      });
     } catch (e) {
       print(e.toString());
     }
