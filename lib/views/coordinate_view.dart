@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:map_nudge/views/map_view.dart';
 import 'package:map_nudge/widgets/custom_coordinate_fields.dart';
 import 'package:map_nudge/widgets/send_location_button.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -21,17 +22,28 @@ class _CoordinateViewState extends State<CoordinateView> {
   @override
   void initState() {
     super.initState();
-    initSocket();
+    initSocket(context);
   }
 
-  Future<void> initSocket() async {
+  void _navToMapView(BuildContext context) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (context) => MapView()));
+  }
+
+  Future<void> initSocket(BuildContext context) async {
     try {
       socket = IO.io("http://192.168.1.2:3200", <String, dynamic>{
         'transports': ['websocket'],
         'autoConnect': true,
       });
+
       socket.connect();
-      socket.onConnect((data) => {print('Connect: ${socket.id}')});
+
+      socket.onConnect((data) {
+        print('Connect: ${socket.id}');
+        _navToMapView(context);
+      });
     } catch (e) {
       print(e.toString());
     }
