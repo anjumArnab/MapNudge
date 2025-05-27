@@ -5,7 +5,10 @@ This application enables real-time location sharing using Socket.IO and Google M
 
 - **Flutter**: Client-side app for UI
 - **Socket.IO**: For sharing data
+---
+## Script for `Socket.IO` server
 
+```javascript
 const http = require("http");
 const server = http.createServer();
 const {Server} = require("socket.io");
