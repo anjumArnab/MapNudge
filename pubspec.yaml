@@ -1,5 +1,5 @@
 name: map_nudge
-description: "A new Flutter project."
+description: "MapNudge"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -14,6 +14,8 @@ dependencies:
   socket_io_client: ^3.1.2
   google_maps_flutter: ^2.12.2
   google_fonts: ^6.2.1
+  location: ^8.0.0
+  flutter_polyline_points: ^2.1.0
 
 dev_dependencies:
   flutter_test:
