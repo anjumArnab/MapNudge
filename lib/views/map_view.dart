@@ -47,10 +47,7 @@ class _MapViewState extends State<MapView> {
             ),
           ),
         );
-        var image = await BitmapDescriptor.fromAssetImage(
-          ImageConfiguration(),
-          "assests/destination.jpg",
-        );
+        var image = await BitmapDescriptor.defaultMarker;
         Marker marker = Marker(
           markerId: MarkerId("ID"),
           icon: image,
