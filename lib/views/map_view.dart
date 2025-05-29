@@ -3,22 +3,21 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:location/location.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 
 class MapView extends StatefulWidget {
   const MapView({super.key});
 
   @override
-  _MapViewState createState() => _MapViewState();
+  State<MapView> createState() => _MapViewState();
 }
 
 class _MapViewState extends State<MapView> {
   late IO.Socket socket;
   late Map<MarkerId, Marker> _markers;
   late Map<PolylineId, Polyline> _polylines;
-  Completer<GoogleMapController> _controller = Completer();
-  Location location = Location();
+  final Completer<GoogleMapController> _controller = Completer();
   LatLng? currentLocation;
   LatLng? socketLocation;
   PolylinePoints polylinePoints = PolylinePoints();
@@ -35,51 +34,85 @@ class _MapViewState extends State<MapView> {
   }
 
   Future<void> _getCurrentLocation() async {
-    bool serviceEnabled;
-    PermissionStatus permissionGranted;
-    LocationData locationData;
-
-    // Check if location service is enabled
-    serviceEnabled = await location.serviceEnabled();
-    if (!serviceEnabled) {
-      serviceEnabled = await location.requestService();
-      if (!serviceEnabled) {
-        return;
-      }
-    }
-
-    // Check location permission
-    permissionGranted = await location.hasPermission();
-    if (permissionGranted == PermissionStatus.denied) {
-      permissionGranted = await location.requestPermission();
-      if (permissionGranted != PermissionStatus.granted) {
-        return;
-      }
-    }
-
     try {
-      locationData = await location.getLocation();
-      if (locationData.latitude != null && locationData.longitude != null) {
-        setState(() {
-          currentLocation = LatLng(
-            locationData.latitude!,
-            locationData.longitude!,
-          );
-        });
-
-        // Add marker for current location
+      // Check if location services are enabled
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        print('Location services are disabled.');
+        // Use default location if service is disabled
         await _addCurrentLocationMarker();
-
-        // Move camera to current location
         final GoogleMapController controller = await _controller.future;
         controller.animateCamera(
           CameraUpdate.newCameraPosition(
             CameraPosition(target: currentLocation!, zoom: 15),
           ),
         );
+        return;
       }
+
+      // Check location permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          print('Location permissions are denied');
+          // Use default location if permission is denied
+          await _addCurrentLocationMarker();
+          final GoogleMapController controller = await _controller.future;
+          controller.animateCamera(
+            CameraUpdate.newCameraPosition(
+              CameraPosition(target: currentLocation!, zoom: 15),
+            ),
+          );
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        print(
+          'Location permissions are permanently denied, we cannot request permissions.',
+        );
+        // Use default location if permission is permanently denied
+        await _addCurrentLocationMarker();
+        final GoogleMapController controller = await _controller.future;
+        controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: currentLocation!, zoom: 15),
+          ),
+        );
+        return;
+      }
+
+      // Get current position
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 10),
+      );
+
+      setState(() {
+        currentLocation = LatLng(position.latitude, position.longitude);
+      });
+
+      // Add marker for current location
+      await _addCurrentLocationMarker();
+
+      // Move camera to current location
+      final GoogleMapController controller = await _controller.future;
+      controller.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: currentLocation!, zoom: 15),
+        ),
+      );
     } catch (e) {
       print('Error getting current location: $e');
+      // Use default location if any error occurs
+      await _addCurrentLocationMarker();
+      final GoogleMapController controller = await _controller.future;
+      controller.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: currentLocation!, zoom: 15),
+        ),
+      );
     }
   }
 
@@ -109,10 +142,18 @@ class _MapViewState extends State<MapView> {
     try {
       // Get route points between current location and socket location
       PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-        "YOUR_GOOGLE_MAPS_API_KEY",
-        PointLatLng(currentLocation!.latitude, currentLocation!.longitude),
-        PointLatLng(socketLocation!.latitude, socketLocation!.longitude),
-        travelMode: TravelMode.driving,
+        googleApiKey: "GOOGLE_MAPS_API_KEY",
+        request: PolylineRequest(
+          origin: PointLatLng(
+            currentLocation!.latitude,
+            currentLocation!.longitude,
+          ),
+          destination: PointLatLng(
+            socketLocation!.latitude,
+            socketLocation!.longitude,
+          ),
+          mode: TravelMode.driving,
+        ),
       );
 
       if (result.points.isNotEmpty) {
