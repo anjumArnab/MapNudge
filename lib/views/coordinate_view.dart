@@ -8,7 +8,7 @@ class CoordinateView extends StatefulWidget {
   const CoordinateView({super.key});
 
   @override
-  _CoordinateViewState createState() => _CoordinateViewState();
+  State<CoordinateView> createState() => _CoordinateViewState();
 }
 
 class _CoordinateViewState extends State<CoordinateView> {
