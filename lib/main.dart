@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:map_nudge/views/coordinate_view.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../views/homepage.dart';
 
 void main() {
   runApp(const MapNudge());
@@ -15,7 +15,7 @@ class MapNudge extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'MapNudge',
       theme: ThemeData(textTheme: GoogleFonts.poppinsTextTheme()),
-      home: CoordinateView(),
+      home: Homepage(),
     );
   }
 }
