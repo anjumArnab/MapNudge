@@ -5,6 +5,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import '../views/coordinate_view.dart';
 
 class MapView extends StatefulWidget {
   const MapView({super.key});
@@ -21,6 +22,7 @@ class _MapViewState extends State<MapView> {
   LatLng? currentLocation;
   LatLng? socketLocation;
   PolylinePoints polylinePoints = PolylinePoints();
+  bool isConnected = false;
 
   @override
   void initState() {
@@ -40,6 +42,12 @@ class _MapViewState extends State<MapView> {
       if (!serviceEnabled) {
         print('Location services are disabled.');
         // Use default location if service is disabled
+        setState(() {
+          currentLocation = LatLng(
+            23.8103,
+            90.4125,
+          ); // Dhaka, Bangladesh default
+        });
         await _addCurrentLocationMarker();
         final GoogleMapController controller = await _controller.future;
         controller.animateCamera(
@@ -57,6 +65,12 @@ class _MapViewState extends State<MapView> {
         if (permission == LocationPermission.denied) {
           print('Location permissions are denied');
           // Use default location if permission is denied
+          setState(() {
+            currentLocation = LatLng(
+              23.8103,
+              90.4125,
+            ); // Dhaka, Bangladesh default
+          });
           await _addCurrentLocationMarker();
           final GoogleMapController controller = await _controller.future;
           controller.animateCamera(
@@ -73,6 +87,12 @@ class _MapViewState extends State<MapView> {
           'Location permissions are permanently denied, we cannot request permissions.',
         );
         // Use default location if permission is permanently denied
+        setState(() {
+          currentLocation = LatLng(
+            23.8103,
+            90.4125,
+          ); // Dhaka, Bangladesh default
+        });
         await _addCurrentLocationMarker();
         final GoogleMapController controller = await _controller.future;
         controller.animateCamera(
@@ -106,6 +126,9 @@ class _MapViewState extends State<MapView> {
     } catch (e) {
       print('Error getting current location: $e');
       // Use default location if any error occurs
+      setState(() {
+        currentLocation = LatLng(23.8103, 90.4125); // Dhaka, Bangladesh default
+      });
       await _addCurrentLocationMarker();
       final GoogleMapController controller = await _controller.future;
       controller.animateCamera(
@@ -142,7 +165,8 @@ class _MapViewState extends State<MapView> {
     try {
       // Get route points between current location and socket location
       PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-        googleApiKey: "GOOGLE_MAPS_API_KEY",
+        googleApiKey:
+            "YOUR_GOOGLE_MAPS_API_KEY", // Replace with your actual API key
         request: PolylineRequest(
           origin: PointLatLng(
             currentLocation!.latitude,
@@ -188,74 +212,159 @@ class _MapViewState extends State<MapView> {
 
   Future<void> initSocket() async {
     try {
-      socket = IO.io("http://127.0.0.1:3700", <String, dynamic>{
-        'transports': ['websockets'],
+      // Fixed: Use localhost for Flutter Web
+      socket = IO.io("http://localhost:3200", <String, dynamic>{
+        'transports': [
+          'websocket',
+          'polling',
+        ], // Fixed: correct transport names
         'autoConnect': true,
       });
+
       socket.connect();
-      socket.on("position-change", (data) async {
-        var latLng = jsonDecode(data);
-        final GoogleMapController controller = await _controller.future;
 
-        // Update socket location
-        socketLocation = LatLng(latLng["lat"], latLng["lng"]);
-
-        // Animate camera to show both points
-        if (currentLocation != null) {
-          // Calculate bounds to show both markers
-          double minLat =
-              currentLocation!.latitude < socketLocation!.latitude
-                  ? currentLocation!.latitude
-                  : socketLocation!.latitude;
-          double maxLat =
-              currentLocation!.latitude > socketLocation!.latitude
-                  ? currentLocation!.latitude
-                  : socketLocation!.latitude;
-          double minLng =
-              currentLocation!.longitude < socketLocation!.longitude
-                  ? currentLocation!.longitude
-                  : socketLocation!.longitude;
-          double maxLng =
-              currentLocation!.longitude > socketLocation!.longitude
-                  ? currentLocation!.longitude
-                  : socketLocation!.longitude;
-
-          controller.animateCamera(
-            CameraUpdate.newLatLngBounds(
-              LatLngBounds(
-                southwest: LatLng(minLat, minLng),
-                northeast: LatLng(maxLat, maxLng),
-              ),
-              100.0, // padding
-            ),
-          );
-        } else {
-          controller.animateCamera(
-            CameraUpdate.newCameraPosition(
-              CameraPosition(target: socketLocation!, zoom: 13),
-            ),
-          );
-        }
-
-        var image = await BitmapDescriptor.defaultMarkerWithHue(
-          BitmapDescriptor.hueRed,
-        );
-        Marker marker = Marker(
-          markerId: MarkerId("socket_location"),
-          icon: image,
-          position: socketLocation!,
-          infoWindow: InfoWindow(title: "Socket Location"),
-        );
-
+      socket.onConnect((data) {
+        print('Connected: ${socket.id}');
         setState(() {
-          _markers[MarkerId("socket_location")] = marker;
+          isConnected = true;
         });
 
-        // Create polyline between current location and socket location
-        await _createPolyline();
+        // NEW: Identify this client as a map viewer
+        socket.emit('identify', {
+          'role': 'map-viewer',
+          'roomId': 'default-room', // Should match the coordinate sender's room
+        });
+      });
+
+      // NEW: Handle identification response
+      socket.on('identified', (data) {
+        print('Map view identified successfully: $data');
+        // Request current position from coordinate senders
+        socket.emit('request-position');
+      });
+
+      // Handle position changes from coordinate senders
+      socket.on("position-change", (data) async {
+        print('Received position data: $data');
+
+        try {
+          Map<String, dynamic> latLng;
+
+          // Handle both string and object data
+          if (data is String) {
+            latLng = jsonDecode(data);
+          } else {
+            latLng = data;
+          }
+
+          final GoogleMapController controller = await _controller.future;
+
+          // Update socket location
+          socketLocation = LatLng(
+            latLng["lat"].toDouble(),
+            latLng["lng"].toDouble(),
+          );
+
+          // Animate camera to show both points
+          if (currentLocation != null) {
+            // Calculate bounds to show both markers
+            double minLat =
+                currentLocation!.latitude < socketLocation!.latitude
+                    ? currentLocation!.latitude
+                    : socketLocation!.latitude;
+            double maxLat =
+                currentLocation!.latitude > socketLocation!.latitude
+                    ? currentLocation!.latitude
+                    : socketLocation!.latitude;
+            double minLng =
+                currentLocation!.longitude < socketLocation!.longitude
+                    ? currentLocation!.longitude
+                    : socketLocation!.longitude;
+            double maxLng =
+                currentLocation!.longitude > socketLocation!.longitude
+                    ? currentLocation!.longitude
+                    : socketLocation!.longitude;
+
+            // Add some padding to the bounds
+            double latPadding = (maxLat - minLat) * 0.1;
+            double lngPadding = (maxLng - minLng) * 0.1;
+
+            controller.animateCamera(
+              CameraUpdate.newLatLngBounds(
+                LatLngBounds(
+                  southwest: LatLng(minLat - latPadding, minLng - lngPadding),
+                  northeast: LatLng(maxLat + latPadding, maxLng + lngPadding),
+                ),
+                100.0, // padding
+              ),
+            );
+          } else {
+            controller.animateCamera(
+              CameraUpdate.newCameraPosition(
+                CameraPosition(target: socketLocation!, zoom: 13),
+              ),
+            );
+          }
+
+          var image = await BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueRed,
+          );
+          Marker marker = Marker(
+            markerId: MarkerId("socket_location"),
+            icon: image,
+            position: socketLocation!,
+            infoWindow: InfoWindow(
+              title: "Received Location",
+              snippet: "Lat: ${latLng["lat"]}, Lng: ${latLng["lng"]}",
+            ),
+          );
+
+          setState(() {
+            _markers[MarkerId("socket_location")] = marker;
+          });
+
+          // Create polyline between current location and socket location
+          await _createPolyline();
+        } catch (e) {
+          print('Error processing position data: $e');
+        }
+      });
+
+      // NEW: Handle position requests
+      socket.on('position-request', (data) {
+        print('Position requested by: ${data['requesterId']}');
+        // This would be handled by coordinate senders, not map viewers
+      });
+
+      // NEW: Handle client join/leave events
+      socket.on('client-joined', (data) {
+        print('Client joined: $data');
+      });
+
+      socket.on('client-left', (data) {
+        print('Client left: $data');
+      });
+
+      // NEW: Handle errors from backend
+      socket.on('error', (data) {
+        print('Socket error: $data');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${data['message'] ?? 'Unknown error'}'),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      });
+
+      socket.onDisconnect((data) {
+        print('Disconnected: $data');
+        setState(() {
+          isConnected = false;
+        });
       });
     } catch (e) {
-      print(e.toString());
+      print('Socket initialization error: ${e.toString()}');
     }
   }
 
@@ -268,9 +377,61 @@ class _MapViewState extends State<MapView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: Text('Map View'),
+        backgroundColor: Colors.green.shade600,
+        foregroundColor: Colors.white,
+        actions: [
+          // Navigation button to CoordinateView
+          IconButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const CoordinateView()),
+              );
+            },
+            icon: Icon(Icons.send),
+            tooltip: 'Send Coordinates',
+          ),
+          // Connection status indicator
+          Padding(
+            padding: EdgeInsets.only(right: 16),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  isConnected ? Icons.wifi : Icons.wifi_off,
+                  color: isConnected ? Colors.white : Colors.red,
+                  size: 20,
+                ),
+                SizedBox(width: 4),
+                Text(
+                  isConnected ? 'Connected' : 'Offline',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
       body:
           currentLocation == null
-              ? Center(child: CircularProgressIndicator())
+              ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: Colors.green.shade600),
+                    SizedBox(height: 16),
+                    Text(
+                      'Loading map...',
+                      style: TextStyle(
+                        color: Colors.green.shade600,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
+              )
               : GoogleMap(
                 initialCameraPosition: CameraPosition(
                   target: currentLocation!,
@@ -285,6 +446,27 @@ class _MapViewState extends State<MapView> {
                 myLocationEnabled: true,
                 myLocationButtonEnabled: true,
               ),
+      floatingActionButton: FloatingActionButton(
+        heroTag: "refresh_position",
+        shape: const CircleBorder(),
+        onPressed:
+            isConnected
+                ? () {
+                  // Request current position from coordinate senders
+                  socket.emit('request-position');
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Requesting current position...'),
+                      backgroundColor: Colors.green.shade600,
+                      behavior: SnackBarBehavior.floating,
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
+                : null,
+        backgroundColor: isConnected ? Colors.green.shade600 : Colors.grey,
+        child: Icon(Icons.refresh, color: Colors.white),
+      ),
     );
   }
 }
