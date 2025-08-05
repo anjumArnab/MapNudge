@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class SendLocationButton extends StatelessWidget {
-  final Function() onPressed;
+  final Function()? onPressed;
 
   const SendLocationButton({super.key, required this.onPressed});
 
