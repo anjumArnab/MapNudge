@@ -4,7 +4,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import '../views/coordinate_view.dart';
-import '../services/socket_service.dart'; // Import the socket service
 
 class MapView extends StatefulWidget {
   const MapView({super.key});
@@ -14,24 +13,13 @@ class MapView extends StatefulWidget {
 }
 
 class _MapViewState extends State<MapView> {
-  final SocketService _socketService = SocketService();
   late Map<MarkerId, Marker> _markers;
   late Map<PolylineId, Polyline> _polylines;
   final Completer<GoogleMapController> _controller = Completer();
   LatLng? currentLocation;
-  LatLng? socketLocation;
+  LatLng? sampleLocation;
   PolylinePoints polylinePoints = PolylinePoints();
-  bool isConnected = false;
   bool isLoadingLocation = true;
-
-  // Stream subscriptions
-  StreamSubscription<bool>? _connectionSubscription;
-  StreamSubscription<Map<String, dynamic>>? _positionChangeSubscription;
-  StreamSubscription<Map<String, dynamic>>? _identifiedSubscription;
-  StreamSubscription<Map<String, dynamic>>? _errorSubscription;
-  StreamSubscription<Map<String, dynamic>>? _clientJoinedSubscription;
-  StreamSubscription<Map<String, dynamic>>? _clientLeftSubscription;
-  StreamSubscription<Map<String, dynamic>>? _positionRequestSubscription;
 
   @override
   void initState() {
@@ -41,182 +29,6 @@ class _MapViewState extends State<MapView> {
     _markers.clear();
     _polylines.clear();
     _getCurrentLocation();
-    _initializeSocketService();
-  }
-
-  Future<void> _initializeSocketService() async {
-    // Set up stream subscriptions
-    _connectionSubscription = _socketService.connectionStream.listen((
-      connected,
-    ) {
-      setState(() {
-        isConnected = connected;
-      });
-
-      if (connected) {
-        // Identify as map viewer when connected
-        _socketService.identify(ClientRole.mapViewer);
-      }
-    });
-
-    _identifiedSubscription = _socketService.identifiedStream.listen((data) {
-      print('Map view identified successfully: $data');
-      // Request current position from coordinate senders
-      _socketService.requestPosition();
-    });
-
-    _positionChangeSubscription = _socketService.positionChangeStream.listen((
-      data,
-    ) async {
-      await _handlePositionChange(data);
-    });
-
-    _positionRequestSubscription = _socketService.positionRequestStream.listen((
-      data,
-    ) {
-      print('Position requested: $data');
-      // This is handled by coordinate senders, map viewers just listen
-    });
-
-    _errorSubscription = _socketService.errorStream.listen((error) {
-      _showError('Socket Error: ${error['message'] ?? 'Unknown error'}');
-    });
-
-    _clientJoinedSubscription = _socketService.clientJoinedStream.listen((
-      data,
-    ) {
-      print('Client joined: $data');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('New client connected'),
-          backgroundColor: Colors.green.shade600,
-          behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    });
-
-    _clientLeftSubscription = _socketService.clientLeftStream.listen((data) {
-      print('Client left: $data');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Client disconnected'),
-          backgroundColor: Colors.orange.shade600,
-          behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    });
-
-    // Connect to the socket server (reuse existing connection if available)
-    if (!_socketService.isConnected) {
-      await _socketService.connect();
-    } else {
-      // If already connected, just identify
-      _socketService.identify(ClientRole.mapViewer);
-      setState(() {
-        isConnected = true;
-      });
-    }
-  }
-
-  Future<void> _handlePositionChange(Map<String, dynamic> data) async {
-    print('Received position data: $data');
-
-    try {
-      // Validate the received data
-      if (!data.containsKey('lat') || !data.containsKey('lng')) {
-        throw Exception('Invalid position data: missing lat or lng');
-      }
-
-      final GoogleMapController controller = await _controller.future;
-
-      // Update socket location
-      socketLocation = LatLng(data["lat"].toDouble(), data["lng"].toDouble());
-
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Location received!\nLat: ${socketLocation!.latitude.toStringAsFixed(6)}, '
-            'Lng: ${socketLocation!.longitude.toStringAsFixed(6)}',
-          ),
-          backgroundColor: Colors.green.shade600,
-          behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 3),
-        ),
-      );
-
-      // Animate camera to show both points
-      if (currentLocation != null) {
-        // Calculate bounds to show both markers
-        double minLat =
-            currentLocation!.latitude < socketLocation!.latitude
-                ? currentLocation!.latitude
-                : socketLocation!.latitude;
-        double maxLat =
-            currentLocation!.latitude > socketLocation!.latitude
-                ? currentLocation!.latitude
-                : socketLocation!.latitude;
-        double minLng =
-            currentLocation!.longitude < socketLocation!.longitude
-                ? currentLocation!.longitude
-                : socketLocation!.longitude;
-        double maxLng =
-            currentLocation!.longitude > socketLocation!.longitude
-                ? currentLocation!.longitude
-                : socketLocation!.longitude;
-
-        // Add some padding to the bounds (minimum 0.01 degrees)
-        double latPadding = (maxLat - minLat) * 0.2;
-        double lngPadding = (maxLng - minLng) * 0.2;
-
-        // Ensure minimum padding
-        latPadding = latPadding < 0.01 ? 0.01 : latPadding;
-        lngPadding = lngPadding < 0.01 ? 0.01 : lngPadding;
-
-        controller.animateCamera(
-          CameraUpdate.newLatLngBounds(
-            LatLngBounds(
-              southwest: LatLng(minLat - latPadding, minLng - lngPadding),
-              northeast: LatLng(maxLat + latPadding, maxLng + lngPadding),
-            ),
-            100.0, // padding
-          ),
-        );
-      } else {
-        controller.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(target: socketLocation!, zoom: 15),
-          ),
-        );
-      }
-
-      // Create marker for received location
-      var receivedLocationIcon = await BitmapDescriptor.defaultMarkerWithHue(
-        BitmapDescriptor.hueRed,
-      );
-      Marker marker = Marker(
-        markerId: MarkerId("socket_location"),
-        icon: receivedLocationIcon,
-        position: socketLocation!,
-        infoWindow: InfoWindow(
-          title: "Received Location",
-          snippet:
-              "Lat: ${data["lat"].toStringAsFixed(6)}, Lng: ${data["lng"].toStringAsFixed(6)}",
-        ),
-      );
-
-      setState(() {
-        _markers[MarkerId("socket_location")] = marker;
-      });
-
-      // Create polyline between current location and socket location
-      await _createPolyline();
-    } catch (e) {
-      print('Error processing position data: $e');
-      _showError('Error processing received location: $e');
-    }
   }
 
   Future<void> _getCurrentLocation() async {
@@ -332,17 +144,107 @@ class _MapViewState extends State<MapView> {
     });
   }
 
+  Future<void> _addSampleLocation() async {
+    if (currentLocation == null) return;
+
+    // Add a sample location marker about 1km away from current location
+    double offsetLat = 0.009; // roughly 1km north
+    double offsetLng = 0.009; // roughly 1km east
+
+    sampleLocation = LatLng(
+      currentLocation!.latitude + offsetLat,
+      currentLocation!.longitude + offsetLng,
+    );
+
+    // Create marker for sample location
+    var sampleLocationIcon = await BitmapDescriptor.defaultMarkerWithHue(
+      BitmapDescriptor.hueRed,
+    );
+    Marker marker = Marker(
+      markerId: MarkerId("sample_location"),
+      icon: sampleLocationIcon,
+      position: sampleLocation!,
+      infoWindow: InfoWindow(
+        title: "Sample Location",
+        snippet:
+            "Lat: ${sampleLocation!.latitude.toStringAsFixed(6)}, Lng: ${sampleLocation!.longitude.toStringAsFixed(6)}",
+      ),
+    );
+
+    setState(() {
+      _markers[MarkerId("sample_location")] = marker;
+    });
+
+    // Show both locations on map
+    await _showBothLocations();
+
+    // Create polyline between current location and sample location
+    await _createPolyline();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Sample location added!\nLat: ${sampleLocation!.latitude.toStringAsFixed(6)}, '
+          'Lng: ${sampleLocation!.longitude.toStringAsFixed(6)}',
+        ),
+        backgroundColor: Colors.green.shade600,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Future<void> _showBothLocations() async {
+    if (currentLocation == null || sampleLocation == null) return;
+
+    final GoogleMapController controller = await _controller.future;
+
+    // Calculate bounds to show both markers
+    double minLat =
+        currentLocation!.latitude < sampleLocation!.latitude
+            ? currentLocation!.latitude
+            : sampleLocation!.latitude;
+    double maxLat =
+        currentLocation!.latitude > sampleLocation!.latitude
+            ? currentLocation!.latitude
+            : sampleLocation!.latitude;
+    double minLng =
+        currentLocation!.longitude < sampleLocation!.longitude
+            ? currentLocation!.longitude
+            : sampleLocation!.longitude;
+    double maxLng =
+        currentLocation!.longitude > sampleLocation!.longitude
+            ? currentLocation!.longitude
+            : sampleLocation!.longitude;
+
+    // Add some padding to the bounds (minimum 0.01 degrees)
+    double latPadding = (maxLat - minLat) * 0.2;
+    double lngPadding = (maxLng - minLng) * 0.2;
+
+    // Ensure minimum padding
+    latPadding = latPadding < 0.01 ? 0.01 : latPadding;
+    lngPadding = lngPadding < 0.01 ? 0.01 : lngPadding;
+
+    controller.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat - latPadding, minLng - lngPadding),
+          northeast: LatLng(maxLat + latPadding, maxLng + lngPadding),
+        ),
+        100.0, // padding
+      ),
+    );
+  }
+
   Future<void> _createPolyline() async {
-    if (currentLocation == null || socketLocation == null) return;
+    if (currentLocation == null || sampleLocation == null) return;
 
     List<LatLng> polylineCoordinates = [];
 
     try {
-      // Get route points between current location and socket location
-      // Note: Replace "YOUR_GOOGLE_MAPS_API_KEY" with your actual API key
       // For now, we'll use a simple straight line
       polylineCoordinates.add(currentLocation!);
-      polylineCoordinates.add(socketLocation!);
+      polylineCoordinates.add(sampleLocation!);
 
       /* Uncomment this section when you have a Google Maps API key
       PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
@@ -353,8 +255,8 @@ class _MapViewState extends State<MapView> {
             currentLocation!.longitude,
           ),
           destination: PointLatLng(
-            socketLocation!.latitude,
-            socketLocation!.longitude,
+            sampleLocation!.latitude,
+            sampleLocation!.longitude,
           ),
           mode: TravelMode.driving,
         ),
@@ -367,7 +269,7 @@ class _MapViewState extends State<MapView> {
       } else {
         // Fallback to straight line if no route found
         polylineCoordinates.add(currentLocation!);
-        polylineCoordinates.add(socketLocation!);
+        polylineCoordinates.add(sampleLocation!);
       }
       */
     } catch (e) {
@@ -375,7 +277,7 @@ class _MapViewState extends State<MapView> {
       // Fallback to straight line
       polylineCoordinates.clear();
       polylineCoordinates.add(currentLocation!);
-      polylineCoordinates.add(socketLocation!);
+      polylineCoordinates.add(sampleLocation!);
     }
 
     PolylineId id = PolylineId("route");
@@ -405,34 +307,17 @@ class _MapViewState extends State<MapView> {
     }
   }
 
-  void _requestPosition() {
-    if (!isConnected) {
-      _showError("Not connected to server. Please wait for connection...");
-      return;
-    }
-
-    _socketService.requestPosition();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Requesting current position from coordinate senders...'),
-        backgroundColor: Colors.green.shade600,
-        behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: 3),
-      ),
-    );
-  }
-
   void _clearMarkers() {
     setState(() {
-      // Remove socket location marker and polyline, keep current location
-      _markers.removeWhere((key, value) => key.value == "socket_location");
+      // Remove sample location marker and polyline, keep current location
+      _markers.removeWhere((key, value) => key.value == "sample_location");
       _polylines.clear();
-      socketLocation = null;
+      sampleLocation = null;
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Markers cleared'),
+        content: Text('Sample markers cleared'),
         backgroundColor: Colors.orange.shade600,
         behavior: SnackBarBehavior.floating,
         duration: Duration(seconds: 2),
@@ -442,22 +327,13 @@ class _MapViewState extends State<MapView> {
 
   void _refreshCurrentLocation() async {
     await _getCurrentLocation();
-    if (socketLocation != null) {
+    if (sampleLocation != null) {
       await _createPolyline();
     }
   }
 
   @override
   void dispose() {
-    // Cancel stream subscriptions
-    _connectionSubscription?.cancel();
-    _positionChangeSubscription?.cancel();
-    _identifiedSubscription?.cancel();
-    _errorSubscription?.cancel();
-    _clientJoinedSubscription?.cancel();
-    _clientLeftSubscription?.cancel();
-    _positionRequestSubscription?.cancel();
-
     super.dispose();
   }
 
@@ -486,25 +362,6 @@ class _MapViewState extends State<MapView> {
             icon: Icon(Icons.clear),
             tooltip: 'Clear Markers',
           ),
-          // Connection status indicator
-          Padding(
-            padding: EdgeInsets.only(right: 16),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  isConnected ? Icons.wifi : Icons.wifi_off,
-                  color: isConnected ? Colors.white : Colors.red,
-                  size: 20,
-                ),
-                SizedBox(width: 4),
-                Text(
-                  isConnected ? 'Online' : 'Offline',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
       body:
@@ -524,16 +381,6 @@ class _MapViewState extends State<MapView> {
                         color: Colors.green.shade600,
                         fontSize: 16,
                         fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      isConnected
-                          ? 'Connected to server'
-                          : 'Connecting to server...',
-                      style: TextStyle(
-                        color: isConnected ? Colors.green : Colors.orange,
-                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -566,17 +413,17 @@ class _MapViewState extends State<MapView> {
             mini: true,
             onPressed: _refreshCurrentLocation,
             backgroundColor: Colors.blue.shade600,
-            child: Icon(Icons.my_location, color: Colors.white, size: 20),
             tooltip: 'Refresh My Location',
+            child: Icon(Icons.my_location, color: Colors.white, size: 20),
           ),
           SizedBox(height: 10),
-          // Request position button
+          // Add sample location button
           FloatingActionButton(
-            heroTag: "request_position",
-            onPressed: isConnected ? _requestPosition : null,
-            backgroundColor: isConnected ? Colors.green.shade600 : Colors.grey,
-            child: Icon(Icons.refresh, color: Colors.white),
-            tooltip: 'Request Position',
+            heroTag: "add_sample_location",
+            onPressed: _addSampleLocation,
+            backgroundColor: Colors.green.shade600,
+            tooltip: 'Add Sample Location',
+            child: Icon(Icons.add_location, color: Colors.white),
           ),
         ],
       ),

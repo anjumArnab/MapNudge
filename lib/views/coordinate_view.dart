@@ -1,10 +1,9 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../views/map_view.dart';
 import '../widgets/custom_coordinate_fields.dart';
 import '../widgets/send_location_button.dart';
-import '../services/socket_service.dart'; // Import the socket service
+import '../services/location_service.dart';
 
 class CoordinateView extends StatefulWidget {
   const CoordinateView({super.key});
@@ -14,59 +13,60 @@ class CoordinateView extends StatefulWidget {
 }
 
 class _CoordinateViewState extends State<CoordinateView> {
-  final SocketService _socketService = SocketService();
+  final LocationService _locationService = LocationService.instance;
   double? latitude;
   double? longitude;
   bool isGettingLocation = false;
+  bool isSendingLocation = false;
   String? locationStatus;
-  bool isConnected = false;
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _latitudeController = TextEditingController();
   final TextEditingController _longitudeController = TextEditingController();
 
-  // Stream subscriptions
-  StreamSubscription<bool>? _connectionSubscription;
-  StreamSubscription<Map<String, dynamic>>? _identifiedSubscription;
-  StreamSubscription<Map<String, dynamic>>? _positionSentSubscription;
-  StreamSubscription<Map<String, dynamic>>? _errorSubscription;
-
   @override
   void initState() {
     super.initState();
-    _initializeSocketService();
+    _checkConnectionStatus();
   }
 
-  Future<void> _initializeSocketService() async {
-    // Set up stream subscriptions
-    _connectionSubscription = _socketService.connectionStream.listen((
-      connected,
-    ) {
-      setState(() {
-        isConnected = connected;
+  void _checkConnectionStatus() {
+    if (!_locationService.isConnected) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showNotConnectedDialog();
       });
+    }
+  }
 
-      if (connected) {
-        // Identify as coordinate sender when connected
-        _socketService.identify(ClientRole.coordinateSender);
-      }
-    });
-
-    _identifiedSubscription = _socketService.identifiedStream.listen((data) {
-      print('Identified successfully: $data');
-    });
-
-    _positionSentSubscription = _socketService.positionSentStream.listen((
-      data,
-    ) {
-      print('Position sent confirmation: $data');
-    });
-
-    _errorSubscription = _socketService.errorStream.listen((error) {
-      _showError('Error: ${error['message'] ?? 'Unknown error'}');
-    });
-
-    // Connect to the socket server
-    await _socketService.connect();
+  void _showNotConnectedDialog() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.warning, color: Colors.orange),
+                SizedBox(width: 8),
+                Text('Not Connected'),
+              ],
+            ),
+            content: Text(
+              'You are not connected to any server. Please go back to homepage and connect to a server first.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop(); // Close dialog
+                  Navigator.of(context).pop(); // Go back to homepage
+                },
+                child: Text('Go to Homepage'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Continue Anyway'),
+              ),
+            ],
+          ),
+    );
   }
 
   Future<void> _getCurrentLocation() async {
@@ -131,8 +131,8 @@ class _CoordinateViewState extends State<CoordinateView> {
         locationStatus = "Location obtained successfully";
       });
 
-      // Automatically send the current location
-      _sendCurrentLocation();
+      // Show success message
+      _showSuccessMessage();
     } catch (e) {
       setState(() {
         isGettingLocation = false;
@@ -142,42 +142,102 @@ class _CoordinateViewState extends State<CoordinateView> {
     }
   }
 
-  void _sendCurrentLocation() {
-    if (latitude != null && longitude != null && isConnected) {
-      _socketService.sendPosition(latitude!, longitude!);
-
+  void _showSuccessMessage() {
+    if (latitude != null && longitude != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Current location sent successfully!\nLat: ${latitude!.toStringAsFixed(6)}, Lng: ${longitude!.toStringAsFixed(6)}',
+            'Current location obtained!\nLat: ${latitude!.toStringAsFixed(6)}, Lng: ${longitude!.toStringAsFixed(6)}',
           ),
           backgroundColor: Colors.green.shade600,
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: 3),
         ),
       );
-    } else if (!isConnected) {
-      _showLocationError("Not connected to server. Please wait...");
     }
   }
 
-  void _sendManualLocation() {
-    if (!isConnected) {
-      _showError("Not connected to server. Please wait...");
+  Future<void> _sendLocationToServer() async {
+    if (!validateAndSave()) return;
+
+    if (!_locationService.isConnected) {
+      _showLocationError('Not connected to server. Please connect first.');
       return;
     }
 
-    if (validateAndSave()) {
-      _socketService.sendPosition(latitude!, longitude!);
+    setState(() {
+      isSendingLocation = true;
+    });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Location sent successfully!'),
-          backgroundColor: Colors.green.shade600,
-          behavior: SnackBarBehavior.floating,
-        ),
+    try {
+      // Try sending via socket first, fallback to HTTP
+      bool success = await _locationService.sendLocationViaSocket(
+        latitude: latitude!,
+        longitude: longitude!,
       );
+
+      if (!success) {
+        // Fallback to HTTP method
+        success = await _locationService.sendLocationViaHttp(
+          latitude: latitude!,
+          longitude: longitude!,
+        );
+      }
+
+      setState(() {
+        isSendingLocation = false;
+      });
+
+      if (success) {
+        _showLocationSentSuccess();
+      } else {
+        _showLocationError('Failed to send location. Please try again.');
+      }
+    } catch (e) {
+      setState(() {
+        isSendingLocation = false;
+      });
+      _showLocationError('Error sending location: $e');
     }
+  }
+
+  void _showLocationSentSuccess() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'Location sent successfully!',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            SizedBox(height: 4),
+            Text(
+              'Lat: ${latitude!.toStringAsFixed(6)}, Lng: ${longitude!.toStringAsFixed(6)}',
+              style: TextStyle(fontSize: 12),
+            ),
+            Text(
+              'Room: ${_locationService.currentRoomId ?? 'Unknown'}',
+              style: TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.green.shade600,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _sendManualLocation() {
+    _sendLocationToServer();
   }
 
   void _showLocationError(String message) {
@@ -191,12 +251,76 @@ class _CoordinateViewState extends State<CoordinateView> {
     );
   }
 
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red.shade600,
-        behavior: SnackBarBehavior.floating,
+  Widget _buildConnectionStatus() {
+    if (!_locationService.isConnected) {
+      return Container(
+        padding: EdgeInsets.all(12),
+        margin: EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.shade300),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.red.shade600, size: 20),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Not Connected to Server',
+                    style: TextStyle(
+                      color: Colors.red.shade700,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    'Locations won\'t be shared with other users',
+                    style: TextStyle(color: Colors.red.shade600, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: EdgeInsets.all(12),
+      margin: EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.green.shade300),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Connected to Server',
+                  style: TextStyle(
+                    color: Colors.green.shade700,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+                Text(
+                  'Room: ${_locationService.currentRoomId} | User: ${_locationService.currentUserId}',
+                  style: TextStyle(color: Colors.green.shade600, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -230,7 +354,10 @@ class _CoordinateViewState extends State<CoordinateView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 32),
+              const SizedBox(height: 16),
+
+              // Connection Status
+              _buildConnectionStatus(),
 
               Text(
                 'MapNudge',
@@ -240,29 +367,6 @@ class _CoordinateViewState extends State<CoordinateView> {
                   fontWeight: FontWeight.bold,
                   color: Colors.green.shade700,
                   letterSpacing: 1.2,
-                ),
-              ),
-
-              // Connection status indicator
-              Container(
-                margin: EdgeInsets.only(top: 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      isConnected ? Icons.wifi : Icons.wifi_off,
-                      color: isConnected ? Colors.green : Colors.red,
-                      size: 16,
-                    ),
-                    SizedBox(width: 4),
-                    Text(
-                      isConnected ? 'Connected' : 'Connecting...',
-                      style: TextStyle(
-                        color: isConnected ? Colors.green : Colors.red,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
                 ),
               ),
 
@@ -281,10 +385,7 @@ class _CoordinateViewState extends State<CoordinateView> {
                   ),
                   const SizedBox(height: 12),
                   ElevatedButton.icon(
-                    onPressed:
-                        (isGettingLocation || !isConnected)
-                            ? null
-                            : _getCurrentLocation,
+                    onPressed: isGettingLocation ? null : _getCurrentLocation,
                     icon:
                         isGettingLocation
                             ? SizedBox(
@@ -301,8 +402,6 @@ class _CoordinateViewState extends State<CoordinateView> {
                     label: Text(
                       isGettingLocation
                           ? 'Getting Location...'
-                          : !isConnected
-                          ? 'Connecting...'
                           : 'Get Current Location',
                       style: TextStyle(fontSize: 16),
                     ),
@@ -395,8 +494,45 @@ class _CoordinateViewState extends State<CoordinateView> {
                     },
                   ),
                   const SizedBox(height: 20),
-                  SendLocationButton(
-                    onPressed: !isConnected ? null : _sendManualLocation,
+
+                  // Send Location Button
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton.icon(
+                      onPressed:
+                          (isSendingLocation ||
+                                  latitude == null ||
+                                  longitude == null)
+                              ? null
+                              : _sendManualLocation,
+                      icon:
+                          isSendingLocation
+                              ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
+                                ),
+                              )
+                              : Icon(Icons.send),
+                      label: Text(
+                        isSendingLocation
+                            ? 'Sending Location...'
+                            : 'Send Location',
+                        style: TextStyle(fontSize: 16),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade600,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -413,13 +549,6 @@ class _CoordinateViewState extends State<CoordinateView> {
   void dispose() {
     _latitudeController.dispose();
     _longitudeController.dispose();
-
-    // Cancel stream subscriptions
-    _connectionSubscription?.cancel();
-    _identifiedSubscription?.cancel();
-    _positionSentSubscription?.cancel();
-    _errorSubscription?.cancel();
-
     super.dispose();
   }
 
