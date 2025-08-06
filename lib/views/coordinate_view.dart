@@ -1,9 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:geolocator/geolocator.dart';
 import '../views/map_view.dart';
 import '../widgets/custom_coordinate_fields.dart';
 import '../widgets/send_location_button.dart';
+import '../services/socket_service.dart'; // Import the socket service
 
 class CoordinateView extends StatefulWidget {
   const CoordinateView({super.key});
@@ -13,7 +14,7 @@ class CoordinateView extends StatefulWidget {
 }
 
 class _CoordinateViewState extends State<CoordinateView> {
-  late IO.Socket socket;
+  final SocketService _socketService = SocketService();
   double? latitude;
   double? longitude;
   bool isGettingLocation = false;
@@ -23,72 +24,49 @@ class _CoordinateViewState extends State<CoordinateView> {
   final TextEditingController _latitudeController = TextEditingController();
   final TextEditingController _longitudeController = TextEditingController();
 
+  // Stream subscriptions
+  StreamSubscription<bool>? _connectionSubscription;
+  StreamSubscription<Map<String, dynamic>>? _identifiedSubscription;
+  StreamSubscription<Map<String, dynamic>>? _positionSentSubscription;
+  StreamSubscription<Map<String, dynamic>>? _errorSubscription;
+
   @override
   void initState() {
     super.initState();
-    initSocket();
+    _initializeSocketService();
   }
 
-  // Removed automatic navigation to MapView - users choose from Homepage
-
-  Future<void> initSocket() async {
-    try {
-      // Fixed: Use localhost for Flutter Web
-      socket = IO.io("http://localhost:3200", <String, dynamic>{
-        'transports': [
-          'websocket',
-          'polling',
-        ], // Fixed: correct transport names
-        'autoConnect': true,
+  Future<void> _initializeSocketService() async {
+    // Set up stream subscriptions
+    _connectionSubscription = _socketService.connectionStream.listen((
+      connected,
+    ) {
+      setState(() {
+        isConnected = connected;
       });
 
-      socket.connect();
+      if (connected) {
+        // Identify as coordinate sender when connected
+        _socketService.identify(ClientRole.coordinateSender);
+      }
+    });
 
-      socket.onConnect((data) {
-        print('Connected: ${socket.id}');
-        setState(() {
-          isConnected = true;
-        });
+    _identifiedSubscription = _socketService.identifiedStream.listen((data) {
+      print('Identified successfully: $data');
+    });
 
-        // NEW: Identify this client as a coordinate sender
-        socket.emit('identify', {
-          'role': 'coordinate-sender',
-          'roomId': 'default-room', // You can make this dynamic
-        });
-      });
+    _positionSentSubscription = _socketService.positionSentStream.listen((
+      data,
+    ) {
+      print('Position sent confirmation: $data');
+    });
 
-      // NEW: Handle identification response
-      socket.on('identified', (data) {
-        print('Identified successfully: $data');
-        // Removed automatic navigation - users stay on coordinate view
-      });
+    _errorSubscription = _socketService.errorStream.listen((error) {
+      _showError('Error: ${error['message'] ?? 'Unknown error'}');
+    });
 
-      // NEW: Handle position-sent confirmation
-      socket.on('position-sent', (data) {
-        print('Position sent confirmation: $data');
-      });
-
-      // NEW: Handle errors from backend
-      socket.on('error', (data) {
-        print('Socket error: $data');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${data['message'] ?? 'Unknown error'}'),
-            backgroundColor: Colors.red.shade600,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      });
-
-      socket.onDisconnect((data) {
-        print('Disconnected: $data');
-        setState(() {
-          isConnected = false;
-        });
-      });
-    } catch (e) {
-      print('Socket initialization error: ${e.toString()}');
-    }
+    // Connect to the socket server
+    await _socketService.connect();
   }
 
   Future<void> _getCurrentLocation() async {
@@ -166,8 +144,7 @@ class _CoordinateViewState extends State<CoordinateView> {
 
   void _sendCurrentLocation() {
     if (latitude != null && longitude != null && isConnected) {
-      var coords = {"lat": latitude, "lng": longitude};
-      socket.emit('position-change', coords);
+      _socketService.sendPosition(latitude!, longitude!);
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -184,6 +161,25 @@ class _CoordinateViewState extends State<CoordinateView> {
     }
   }
 
+  void _sendManualLocation() {
+    if (!isConnected) {
+      _showError("Not connected to server. Please wait...");
+      return;
+    }
+
+    if (validateAndSave()) {
+      _socketService.sendPosition(latitude!, longitude!);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Location sent successfully!'),
+          backgroundColor: Colors.green.shade600,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   void _showLocationError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -191,6 +187,16 @@ class _CoordinateViewState extends State<CoordinateView> {
         backgroundColor: Colors.red.shade600,
         behavior: SnackBarBehavior.floating,
         duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red.shade600,
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
@@ -237,7 +243,7 @@ class _CoordinateViewState extends State<CoordinateView> {
                 ),
               ),
 
-              // NEW: Connection status indicator
+              // Connection status indicator
               Container(
                 margin: EdgeInsets.only(top: 8),
                 child: Row(
@@ -390,28 +396,7 @@ class _CoordinateViewState extends State<CoordinateView> {
                   ),
                   const SizedBox(height: 20),
                   SendLocationButton(
-                    onPressed:
-                        !isConnected
-                            ? null
-                            : () {
-                              if (validateAndSave()) {
-                                var coords = {
-                                  "lat": latitude,
-                                  "lng": longitude,
-                                };
-                                socket.emit('position-change', coords);
-
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: const Text(
-                                      'Location sent successfully!',
-                                    ),
-                                    backgroundColor: Colors.green.shade600,
-                                    behavior: SnackBarBehavior.floating,
-                                  ),
-                                );
-                              }
-                            },
+                    onPressed: !isConnected ? null : _sendManualLocation,
                   ),
                 ],
               ),
@@ -428,7 +413,13 @@ class _CoordinateViewState extends State<CoordinateView> {
   void dispose() {
     _latitudeController.dispose();
     _longitudeController.dispose();
-    socket.dispose();
+
+    // Cancel stream subscriptions
+    _connectionSubscription?.cancel();
+    _identifiedSubscription?.cancel();
+    _positionSentSubscription?.cancel();
+    _errorSubscription?.cancel();
+
     super.dispose();
   }
 
