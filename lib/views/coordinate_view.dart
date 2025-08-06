@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../views/map_view.dart';
 import '../widgets/custom_coordinate_fields.dart';
-import '../widgets/send_location_button.dart';
 import '../services/location_service.dart';
 
 class CoordinateView extends StatefulWidget {
