@@ -1,4 +1,3 @@
-// Enhanced LocationService with fixed Socket.IO connection
 import 'dart:convert';
 import 'dart:async';
 import 'package:http/http.dart' as http;
