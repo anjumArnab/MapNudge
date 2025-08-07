@@ -1,8 +1,9 @@
+// Create or update your models/location.dart file
 class Location {
   final String fromUserId;
   final double latitude;
   final double longitude;
-  final DateTime timestamp;
+  final String timestamp;
 
   Location({
     required this.fromUserId,
@@ -12,13 +13,13 @@ class Location {
   });
 
   factory Location.fromJson(Map<String, dynamic> json) {
+    // Safe parsing with null checks and defaults
     return Location(
-      fromUserId: json['fromUserId'] ?? '',
-      latitude: json['latitude']?.toDouble() ?? 0.0,
-      longitude: json['longitude']?.toDouble() ?? 0.0,
-      timestamp: DateTime.parse(
-        json['timestamp'] ?? DateTime.now().toIso8601String(),
-      ),
+      fromUserId: json['fromUserId']?.toString() ?? 'unknown',
+      latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
+      longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
+      timestamp:
+          json['timestamp']?.toString() ?? DateTime.now().toIso8601String(),
     );
   }
 
@@ -27,7 +28,12 @@ class Location {
       'fromUserId': fromUserId,
       'latitude': latitude,
       'longitude': longitude,
-      'timestamp': timestamp.toIso8601String(),
+      'timestamp': timestamp,
     };
+  }
+
+  @override
+  String toString() {
+    return 'Location(fromUserId: $fromUserId, lat: $latitude, lng: $longitude, timestamp: $timestamp)';
   }
 }
