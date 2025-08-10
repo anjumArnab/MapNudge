@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../models/connection_status.dart';
 import '../models/user_location.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class LocationService {
   // Singleton instance
@@ -60,7 +60,7 @@ class LocationService {
     required String userId,
   }) async {
     try {
-      developer.log('🔌 Attempting to connect to server: $serverUrl');
+      developer.log('Attempting to connect to server: $serverUrl');
 
       // Clean up existing connection
       await disconnect();

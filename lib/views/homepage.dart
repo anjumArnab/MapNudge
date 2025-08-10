@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../widgets/action_button.dart';
 import '../models/connection_status.dart';
 import '../services/location_service.dart';
 import '../views/coordinate_view.dart';
@@ -352,235 +353,191 @@ class _HomepageState extends State<Homepage> {
   }
 
   Widget _buildConnectionSection() {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Server Connection',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.green.shade700,
-                  ),
-                ),
-                if (_isConnected)
-                  IconButton(
-                    onPressed: _showConnectionInfo,
-                    icon: Icon(Icons.info_outline),
-                    tooltip: 'Connection Info',
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // Server URL field
-            TextField(
-              controller: _serverUrlController,
-              decoration: InputDecoration(
-                labelText: 'Server URL (ngrok)',
-                hintText: 'https://abc123.ngrok.io',
-                prefixIcon: Icon(Icons.cloud),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                helperText: 'Use your ngrok URL here',
-              ),
-              enabled: !_isConnected && !_isConnecting,
-              keyboardType: TextInputType.url,
-            ),
-
-            const SizedBox(height: 12),
-
-            // Room ID field
-            TextField(
-              controller: _roomIdController,
-              decoration: InputDecoration(
-                labelText: 'Room ID',
-                hintText: 'Enter room ID to share with friends',
-                prefixIcon: Icon(Icons.meeting_room),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                helperText: 'Share this ID with others to connect',
-              ),
-              enabled: !_isConnected && !_isConnecting,
-            ),
-
-            const SizedBox(height: 12),
-
-            // User ID field
-            TextField(
-              controller: _userIdController,
-              decoration: InputDecoration(
-                labelText: 'Your Name/ID',
-                hintText: 'Enter your unique identifier',
-                prefixIcon: Icon(Icons.person),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                helperText: 'Letters, numbers, and underscores only',
-              ),
-              enabled: !_isConnected && !_isConnecting,
-              maxLength: 20,
-            ),
-
-            const SizedBox(height: 16),
-
-            // Connection button
-            ElevatedButton.icon(
-              onPressed:
-                  _isConnecting
-                      ? null
-                      : (_isConnected ? _disconnect : _connectToServer),
-              icon:
-                  _isConnecting
-                      ? SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                      : Icon(
-                        _isConnected
-                            ? Icons.logout
-                            : Icons.connect_without_contact,
-                      ),
-              label: Text(
-                _isConnecting
-                    ? 'Connecting...'
-                    : (_isConnected ? 'Disconnect' : 'Connect to Server'),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    _isConnected ? Colors.red.shade600 : Colors.green.shade600,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-            ),
-
-            // Connection status
-            if (_connectionStatus != null) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color:
-                      _isConnected ? Colors.green.shade50 : Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color:
-                        _isConnected
-                            ? Colors.green.shade300
-                            : Colors.red.shade300,
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    _isConnecting
-                        ? SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.blue.shade600,
-                          ),
-                        )
-                        : Icon(
-                          _isConnected ? Icons.check_circle : Icons.error,
-                          color:
-                              _isConnected
-                                  ? Colors.green.shade600
-                                  : Colors.red.shade600,
-                          size: 16,
-                        ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _connectionStatus!,
-                        style: TextStyle(
-                          color:
-                              _isConnected
-                                  ? Colors.green.shade600
-                                  : Colors.red.shade600,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-
-            // Room users
-            if (_isConnected && _roomUsers.isNotEmpty) ...[
-              const SizedBox(height: 12),
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
               Text(
-                'Users online (${_roomUsers.length}):',
+                'Server Connection',
                 style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                   color: Colors.green.shade700,
                 ),
               ),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 8,
-                children:
-                    _roomUsers
-                        .map(
-                          (user) => Chip(
-                            label: Text(user, style: TextStyle(fontSize: 12)),
-                            backgroundColor:
-                                user == _locationService.currentUserId
-                                    ? Colors.blue.shade100
-                                    : Colors.green.shade100,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                            avatar:
-                                user == _locationService.currentUserId
-                                    ? Icon(
-                                      Icons.person,
-                                      size: 16,
-                                      color: Colors.blue.shade600,
-                                    )
-                                    : null,
-                          ),
-                        )
-                        .toList(),
-              ),
+              if (_isConnected)
+                IconButton(
+                  onPressed: _showConnectionInfo,
+                  icon: Icon(Icons.info_outline),
+                  tooltip: 'Connection Info',
+                ),
             ],
+          ),
+          const SizedBox(height: 16),
 
-            // Health check button (optional)
-            if (_isConnected) ...[
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: () async {
-                  final isHealthy = await _locationService.checkServerHealth();
-                  _showSuccessSnackBar(
-                    isHealthy
-                        ? 'Server connection is healthy'
-                        : 'Server connection issues detected',
-                  );
-                },
-                icon: Icon(Icons.health_and_safety, size: 16),
-                label: Text('Check Connection', style: TextStyle(fontSize: 12)),
+          // Server URL field
+          TextField(
+            controller: _serverUrlController,
+            decoration: InputDecoration(
+              labelText: 'Server URL (ngrok)',
+              hintText: 'https://abc123.ngrok.io',
+              prefixIcon: Icon(Icons.cloud),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
               ),
-            ],
+              helperText: 'Use your ngrok URL here',
+            ),
+            enabled: !_isConnected && !_isConnecting,
+            keyboardType: TextInputType.url,
+          ),
+
+          const SizedBox(height: 12),
+
+          // Room ID field
+          TextField(
+            controller: _roomIdController,
+            decoration: InputDecoration(
+              labelText: 'Room ID',
+              hintText: 'Enter room ID to share with friends',
+              prefixIcon: Icon(Icons.meeting_room),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              helperText: 'Share this ID with others to connect',
+            ),
+            enabled: !_isConnected && !_isConnecting,
+          ),
+
+          const SizedBox(height: 12),
+
+          // User ID field
+          TextField(
+            controller: _userIdController,
+            decoration: InputDecoration(
+              labelText: 'Your Name/ID',
+              hintText: 'Enter your unique identifier',
+              prefixIcon: Icon(Icons.person),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              helperText: 'Letters, numbers, and underscores only',
+            ),
+            enabled: !_isConnected && !_isConnecting,
+            maxLength: 20,
+          ),
+
+          const SizedBox(height: 16),
+
+          // Connection button
+          ElevatedButton.icon(
+            onPressed:
+                _isConnecting
+                    ? null
+                    : (_isConnected ? _disconnect : _connectToServer),
+            icon:
+                _isConnecting
+                    ? SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                    : Icon(
+                      _isConnected
+                          ? Icons.logout
+                          : Icons.connect_without_contact,
+                    ),
+            label: Text(
+              _isConnecting
+                  ? 'Connecting...'
+                  : (_isConnected ? 'Disconnect' : 'Connect to Server'),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor:
+                  _isConnected ? Colors.red.shade600 : Colors.green.shade600,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+
+          // Connection status
+          if (_connectionStatus != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: _isConnected ? Colors.green.shade50 : Colors.red.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color:
+                      _isConnected
+                          ? Colors.green.shade300
+                          : Colors.red.shade300,
+                ),
+              ),
+              child: Row(
+                children: [
+                  _isConnecting
+                      ? SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.blue.shade600,
+                        ),
+                      )
+                      : Icon(
+                        _isConnected ? Icons.check_circle : Icons.error,
+                        color:
+                            _isConnected
+                                ? Colors.green.shade600
+                                : Colors.red.shade600,
+                        size: 16,
+                      ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _connectionStatus!,
+                      style: TextStyle(
+                        color:
+                            _isConnected
+                                ? Colors.green.shade600
+                                : Colors.red.shade600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
-        ),
+
+          // Health check button (optional)
+          if (_isConnected) ...[
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () async {
+                final isHealthy = await _locationService.checkServerHealth();
+                _showSuccessSnackBar(
+                  isHealthy
+                      ? 'Server connection is healthy'
+                      : 'Server connection issues detected',
+                );
+              },
+              icon: Icon(Icons.health_and_safety, size: 16),
+              label: Text('Check Connection', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -625,59 +582,29 @@ class _HomepageState extends State<Homepage> {
               // Navigation Buttons (only show when connected)
               if (_isConnected) ...[
                 // Send Location Button
-                SizedBox(
-                  width: double.infinity,
-                  height: 60,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => CoordinateView(),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.send),
-                    label: const Text(
-                      'Send Location',
-                      style: TextStyle(fontSize: 18),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green.shade600,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
+                ActionButton(
+                  icon: Icons.send,
+                  label: 'Send Location',
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => CoordinateView()),
+                    );
+                  },
                 ),
 
                 const SizedBox(height: 16),
 
                 // View Map Button
-                SizedBox(
-                  width: double.infinity,
-                  height: 60,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => MapView()),
-                      );
-                    },
-                    icon: const Icon(Icons.map),
-                    label: const Text(
-                      'View Map',
-                      style: TextStyle(fontSize: 18),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue.shade600,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
+                ActionButton(
+                  icon: Icons.map,
+                  label: 'View Map',
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => MapView()),
+                    );
+                  },
                 ),
 
                 const SizedBox(height: 16),

@@ -1,11 +1,14 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import '../widgets/action_button.dart';
 import '../models/connection_status.dart';
 import '../models/user_location.dart';
 import '../services/location_service.dart';
 import '../views/map_view.dart';
-import '../widgets/custom_coordinate_fields.dart';
+import '../widgets/coordinate_fields.dart';
 
 class CoordinateView extends StatefulWidget {
   const CoordinateView({super.key});
@@ -589,11 +592,6 @@ class _CoordinateViewState extends State<CoordinateView> {
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: _showLocationStats,
-                icon: Icon(Icons.analytics, size: 16),
-                tooltip: 'Location Stats',
-              ),
             ],
           ),
           if (_roomUsers.length > 1) ...[
@@ -626,66 +624,6 @@ class _CoordinateViewState extends State<CoordinateView> {
             ),
           ],
         ],
-      ),
-    );
-  }
-
-  Widget _buildQuickActions() {
-    if (!_isConnected) return Container();
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      child: Padding(
-        padding: EdgeInsets.all(12),
-        child: Column(
-          children: [
-            Text(
-              'Quick Actions',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: Colors.green.shade700,
-              ),
-            ),
-            SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _locationService.requestAllLocations(),
-                    icon: Icon(Icons.refresh, size: 16),
-                    label: Text('Refresh', style: TextStyle(fontSize: 12)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange.shade600,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 8),
-                    ),
-                  ),
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const MapView(),
-                        ),
-                      );
-                    },
-                    icon: Icon(Icons.map, size: 16),
-                    label: Text('View Map', style: TextStyle(fontSize: 12)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue.shade600,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 8),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -740,28 +678,10 @@ class _CoordinateViewState extends State<CoordinateView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 16),
-
               // Connection Status
               _buildConnectionStatus(),
 
-              // Quick Actions (when connected)
-              _buildQuickActions(),
-
-              if (_isConnected) const SizedBox(height: 16),
-
-              Text(
-                'MapNudge',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green.shade700,
-                  letterSpacing: 1.2,
-                ),
-              ),
-
-              const SizedBox(height: 8),
+              const SizedBox(height: 5),
 
               if (_totalLocationsSent > 0)
                 Text(
@@ -890,7 +810,7 @@ class _CoordinateViewState extends State<CoordinateView> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  CustomCoordinateField(
+                  CoordinateField(
                     controller: _latitudeController,
                     label: 'Latitude',
                     hint: 'Enter latitude (-90 to 90)',
@@ -902,7 +822,7 @@ class _CoordinateViewState extends State<CoordinateView> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  CustomCoordinateField(
+                  CoordinateField(
                     controller: _longitudeController,
                     label: 'Longitude',
                     hint: 'Enter longitude (-180 to 180)',
@@ -915,64 +835,24 @@ class _CoordinateViewState extends State<CoordinateView> {
                   ),
                   const SizedBox(height: 20),
 
-                  // Send Location Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton.icon(
-                      onPressed:
-                          (isSendingLocation ||
-                                  latitude == null ||
-                                  longitude == null ||
-                                  !_isConnected)
-                              ? null
-                              : _sendManualLocation,
-                      icon:
-                          isSendingLocation
-                              ? SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
-                                  ),
-                                ),
-                              )
-                              : Icon(Icons.send),
-                      label: Text(
+                  ActionButton(
+                    icon: Icons.send,
+                    label:
                         isSendingLocation
                             ? 'Sending Location...'
                             : !_isConnected
                             ? 'Connect to Server First'
                             : 'Send Location to Room',
-                        style: TextStyle(fontSize: 16),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            !_isConnected
-                                ? Colors.grey.shade400
-                                : Colors.blue.shade600,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                    ),
-                  ),
 
-                  if (latitude != null && longitude != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Ready to send: ${latitude!.toStringAsFixed(6)}, ${longitude!.toStringAsFixed(6)}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.green.shade600,
-                        fontStyle: FontStyle.italic,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+                    onPressed:
+                        () =>
+                            (isSendingLocation ||
+                                    latitude == null ||
+                                    longitude == null ||
+                                    !_isConnected)
+                                ? null
+                                : _sendManualLocation,
+                  ),
                 ],
               ),
 

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-class CustomCoordinateField extends StatelessWidget {
+class CoordinateField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
   final String hint;
@@ -9,7 +9,7 @@ class CustomCoordinateField extends StatelessWidget {
   final IconData icon;
   final Function(String?) onSaved;
 
-  const CustomCoordinateField({
+  const CoordinateField({
     super.key,
     required this.controller,
     required this.label,
