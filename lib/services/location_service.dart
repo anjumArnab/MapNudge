@@ -1,603 +1,433 @@
-import 'dart:convert';
 import 'dart:async';
-import 'package:http/http.dart' as http;
-import '../models/location.dart';
+import 'dart:developer' as developer;
+import '../models/connection_status.dart';
+import '../models/user_location.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:flutter/foundation.dart';
 
 class LocationService {
-  static LocationService? _instance;
-  static LocationService get instance {
-    _instance ??= LocationService._internal();
-    return _instance!;
-  }
-
+  // Singleton instance
+  static final LocationService _instance = LocationService._internal();
+  factory LocationService() => _instance;
   LocationService._internal();
 
+  // Socket.io client
   IO.Socket? _socket;
+
+  // Connection state
+  bool _isConnected = false;
   String? _serverUrl;
   String? _currentRoomId;
   String? _currentUserId;
-  bool _isConnected = false;
-  bool _httpOnlyMode = false; // Flag for HTTP-only fallback mode
-  Timer? _httpPollingTimer; // Timer for HTTP-only mode polling
+  List<String> _roomUsers = [];
 
-  // Stream controllers for different events
-  final StreamController<Location> _locationStreamController =
-      StreamController<Location>.broadcast();
-  final StreamController<bool> _connectionStreamController =
-      StreamController<bool>.broadcast();
-  final StreamController<String> _errorStreamController =
-      StreamController<String>.broadcast();
-  final StreamController<List<String>> _roomUsersStreamController =
+  // User locations storage
+  final Map<String, UserLocation> _userLocations = {};
+
+  // Stream controllers for reactive updates
+  final StreamController<ConnectionStatus> _connectionController =
+      StreamController<ConnectionStatus>.broadcast();
+  final StreamController<UserLocation> _locationUpdateController =
+      StreamController<UserLocation>.broadcast();
+  final StreamController<Map<String, UserLocation>> _allLocationsController =
+      StreamController<Map<String, UserLocation>>.broadcast();
+  final StreamController<List<String>> _roomUsersController =
       StreamController<List<String>>.broadcast();
+  final StreamController<String> _errorController =
+      StreamController<String>.broadcast();
 
   // Getters for streams
-  Stream<Location> get locationStream => _locationStreamController.stream;
-  Stream<bool> get connectionStream => _connectionStreamController.stream;
-  Stream<String> get errorStream => _errorStreamController.stream;
-  Stream<List<String>> get roomUsersStream => _roomUsersStreamController.stream;
+  Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
+  Stream<UserLocation> get locationUpdateStream =>
+      _locationUpdateController.stream;
+  Stream<Map<String, UserLocation>> get allLocationsStream =>
+      _allLocationsController.stream;
+  Stream<List<String>> get roomUsersStream => _roomUsersController.stream;
+  Stream<String> get errorStream => _errorController.stream;
 
+  // Getters for current state
   bool get isConnected => _isConnected;
   String? get currentRoomId => _currentRoomId;
   String? get currentUserId => _currentUserId;
+  List<String> get roomUsers => List.unmodifiable(_roomUsers);
+  Map<String, UserLocation> get userLocations =>
+      Map.unmodifiable(_userLocations);
+  String? get serverUrl => _serverUrl;
 
-  // Test server connection with enhanced debugging
-  Future<bool> testConnection(String serverUrl) async {
-    try {
-      debugPrint('=== Testing Connection ===');
-      debugPrint('Input serverUrl: "$serverUrl"');
-      debugPrint('serverUrl type: ${serverUrl.runtimeType}');
-
-      if (serverUrl.isEmpty) {
-        debugPrint('ERROR: Server URL is empty');
-        return false;
-      }
-
-      final url = serverUrl.endsWith('/') ? serverUrl : '$serverUrl/';
-      debugPrint('Final URL: "$url"');
-
-      debugPrint('Making HTTP request...');
-      final response = await http
-          .get(
-            Uri.parse(url),
-            headers: {
-              'ngrok-skip-browser-warning': 'true',
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-            },
-          )
-          .timeout(Duration(seconds: 15));
-
-      debugPrint('Response status: ${response.statusCode}');
-      debugPrint('Response headers: ${response.headers}');
-      debugPrint(
-        'Response body (first 200 chars): ${response.body.length > 200 ? response.body.substring(0, 200) + "..." : response.body}',
-      );
-
-      if (response.statusCode == 200) {
-        try {
-          final data = jsonDecode(response.body);
-          debugPrint('JSON parsed successfully: $data');
-          return true;
-        } catch (jsonError) {
-          debugPrint('JSON parsing error: $jsonError');
-          debugPrint('Raw response body: ${response.body}');
-          return false;
-        }
-      } else {
-        debugPrint('HTTP error: ${response.statusCode}');
-        return false;
-      }
-    } catch (e, stackTrace) {
-      debugPrint('Connection test exception: $e');
-      debugPrint('Stack trace: $stackTrace');
-      return false;
-    }
-  }
-
-  // Connect to server and join room with fixed Socket.IO implementation
+  // Connect to server and join room
   Future<bool> connectToServer({
     required String serverUrl,
     required String roomId,
     required String userId,
   }) async {
     try {
-      debugPrint('=== Connect to Server ===');
-      debugPrint('serverUrl: "$serverUrl" (${serverUrl.runtimeType})');
-      debugPrint('roomId: "$roomId" (${roomId.runtimeType})');
-      debugPrint('userId: "$userId" (${userId.runtimeType})');
+      developer.log('🔌 Attempting to connect to server: $serverUrl');
 
-      // Validate inputs
-      if (serverUrl.isEmpty) {
-        debugPrint('ERROR: serverUrl is empty');
-        _errorStreamController.add('Server URL cannot be empty');
-        return false;
-      }
-      if (roomId.isEmpty) {
-        debugPrint('ERROR: roomId is empty');
-        _errorStreamController.add('Room ID cannot be empty');
-        return false;
-      }
-      if (userId.isEmpty) {
-        debugPrint('ERROR: userId is empty');
-        _errorStreamController.add('User ID cannot be empty');
-        return false;
-      }
+      // Clean up existing connection
+      await disconnect();
 
-      _serverUrl = serverUrl.endsWith('/') ? serverUrl : '$serverUrl/';
+      _serverUrl = serverUrl;
       _currentRoomId = roomId;
       _currentUserId = userId;
 
-      debugPrint('Processed serverUrl: "$_serverUrl"');
-      debugPrint('Stored roomId: "$_currentRoomId"');
-      debugPrint('Stored userId: "$_currentUserId"');
+      // Configure socket options
+      _socket = IO.io(
+        serverUrl,
+        IO.OptionBuilder()
+            .setTransports(['websocket']) // Use websocket transport
+            .enableAutoConnect() // Auto connect
+            .enableReconnection() // Auto reconnect
+            .setReconnectionAttempts(5) // Retry attempts
+            .setReconnectionDelay(1000) // Delay between attempts
+            .setTimeout(10000) // Connection timeout
+            .build(),
+      );
 
-      // Disconnect existing connection if any
-      await disconnect();
+      // Set up connection event listeners
+      _setupConnectionListeners();
 
-      debugPrint('Creating socket connection...');
+      // Set up location event listeners
+      _setupLocationListeners();
 
-      // FIXED: Multiple fallback approaches for socket creation
-      try {
-        // Remove trailing slash for socket connection
-        String socketUrl = _serverUrl!;
-        if (socketUrl.endsWith('/')) {
-          socketUrl = socketUrl.substring(0, socketUrl.length - 1);
+      // Wait for connection
+      final Completer<bool> connectionCompleter = Completer<bool>();
+      Timer connectionTimeout = Timer(Duration(seconds: 15), () {
+        if (!connectionCompleter.isCompleted) {
+          connectionCompleter.complete(false);
         }
+      });
 
-        debugPrint('Socket URL: "$socketUrl"');
+      _socket!.onConnect((_) {
+        developer.log('Connected to server, joining room...');
 
-        // Try Method 1: Minimal configuration
-        try {
-          debugPrint('Attempting Method 1: Minimal configuration...');
-          _socket = IO.io(socketUrl);
-          debugPrint('Method 1 successful');
-        } catch (e) {
-          debugPrint('Method 1 failed: $e');
+        // Join room after connection
+        _socket!.emit('join-room', {'roomId': roomId, 'userId': userId});
+      });
 
-          // Try Method 2: Basic configuration with Map
-          try {
-            debugPrint('Attempting Method 2: Basic configuration...');
-            _socket = IO.io(socketUrl, {
-              'transports': ['websocket', 'polling'],
-            });
-            debugPrint('Method 2 successful');
-          } catch (e2) {
-            debugPrint('Method 2 failed: $e2');
-
-            // Try Method 3: Using OptionBuilder with null safety
-            try {
-              debugPrint('Attempting Method 3: OptionBuilder...');
-              _socket = IO.io(
-                socketUrl,
-                IO.OptionBuilder()
-                    .setTransports(['websocket'])
-                    .enableAutoConnect()
-                    .build(),
-              );
-              debugPrint('Method 3 successful');
-            } catch (e3) {
-              debugPrint('Method 3 failed: $e3');
-
-              // Try Method 4: Absolute minimal approach
-              try {
-                debugPrint('Attempting Method 4: Absolute minimal...');
-                _socket = IO.io(socketUrl, IO.OptionBuilder().build());
-                debugPrint('Method 4 successful');
-              } catch (e4) {
-                debugPrint('All socket creation methods failed');
-                debugPrint('Method 1 error: $e');
-                debugPrint('Method 2 error: $e2');
-                debugPrint('Method 3 error: $e3');
-                debugPrint('Method 4 error: $e4');
-                throw Exception(
-                  'All socket creation methods failed. Last error: $e4',
-                );
-              }
-            }
-          }
+      _socket!.on('joined-room', (data) {
+        connectionTimeout.cancel();
+        if (!connectionCompleter.isCompleted) {
+          developer.log('Successfully joined room: ${data['roomId']}');
+          _handleRoomJoined(data);
+          connectionCompleter.complete(true);
         }
+      });
 
-        debugPrint('Socket created successfully');
-      } catch (socketError) {
-        debugPrint('Socket creation error: $socketError');
-        _errorStreamController.add(
-          'Failed to create socket connection: $socketError',
-        );
-
-        // Try HTTP-only fallback
-        debugPrint('Attempting HTTP-only mode...');
-        _isConnected = true; // Fake connection for HTTP-only mode
-        _connectionStreamController.add(true);
-        return true;
-      }
-
-      debugPrint('Socket created, setting up listeners...');
-      // Set up event listeners only if socket was created
-      if (_socket != null) {
-        _setupSocketListeners();
-
-        debugPrint('Connecting socket...');
-        // Connect and join room
-        _socket!.connect();
-
-        debugPrint('Waiting for connection...');
-        // Wait for connection with timeout
-        bool connected = await _waitForConnection();
-        debugPrint('Connection result: $connected');
-
-        if (connected) {
-          debugPrint('Connected successfully, joining room...');
-          _joinRoom();
-        } else {
-          debugPrint('Socket connection failed, switching to HTTP-only mode');
-          _httpOnlyMode = true;
-          _isConnected = true;
-          _connectionStreamController.add(true);
-          _startHttpPolling(); // Start polling for HTTP-only mode
+      _socket!.onConnectError((error) {
+        developer.log('Connection error: $error');
+        connectionTimeout.cancel();
+        if (!connectionCompleter.isCompleted) {
+          _handleConnectionError('Connection failed: $error');
+          connectionCompleter.complete(false);
         }
-      } else if (_httpOnlyMode) {
-        debugPrint('Operating in HTTP-only mode');
-        _startHttpPolling(); // Start polling for HTTP-only mode
-      }
+      });
 
-      return _isConnected;
-    } catch (e, stackTrace) {
-      debugPrint('Error connecting to server: $e');
-      debugPrint('Stack trace: $stackTrace');
-      _errorStreamController.add('Connection failed: $e');
+      _socket!.connect();
+      return await connectionCompleter.future;
+    } catch (e) {
+      developer.log('Connection exception: $e');
+      _handleConnectionError('Connection failed: $e');
       return false;
     }
   }
 
-  void _setupSocketListeners() {
-    if (_socket == null) {
-      debugPrint('ERROR: Socket is null in _setupSocketListeners');
-      return;
-    }
-
-    debugPrint('Setting up socket listeners...');
+  // Set up connection-related event listeners
+  void _setupConnectionListeners() {
+    if (_socket == null) return;
 
     _socket!.onConnect((_) {
-      debugPrint('Connected to MapNudge server');
-      debugPrint('Socket ID: ${_socket!.id}');
-      _isConnected = true;
-      _connectionStreamController.add(true);
+      developer.log('Socket connected');
     });
 
     _socket!.onDisconnect((reason) {
-      debugPrint('Disconnected from MapNudge server');
-      debugPrint('Disconnect reason: $reason');
+      developer.log('Socket disconnected: $reason');
       _isConnected = false;
-      _connectionStreamController.add(false);
-    });
-
-    _socket!.onConnectError((error) {
-      debugPrint('Connection error details: $error');
-      debugPrint('Error type: ${error.runtimeType}');
-      if (error is Map) {
-        debugPrint('Error map: $error');
-      }
-      _errorStreamController.add('Connection error: $error');
-    });
-
-    _socket!.on('connect_error', (error) {
-      debugPrint('Connect error event details: $error');
-      debugPrint('Error type: ${error.runtimeType}');
-      _errorStreamController.add('Socket connection error: $error');
-    });
-
-    _socket!.on('room-joined', (data) {
-      debugPrint('Successfully joined room: $data');
-    });
-
-    _socket!.on('location-received', (data) {
-      try {
-        debugPrint('Raw location data received: $data');
-        final location = Location.fromJson(Map<String, dynamic>.from(data));
-        debugPrint('Location received from ${location.fromUserId}');
-        _locationStreamController.add(location);
-      } catch (e) {
-        debugPrint('Error parsing received location: $e');
-        debugPrint('Raw data: $data');
-        _errorStreamController.add('Error parsing location data: $e');
-      }
-    });
-
-    _socket!.on('location-sent', (data) {
-      debugPrint('Location sent confirmation: $data');
-    });
-
-    _socket!.on('user-joined', (data) {
-      debugPrint('User joined room: $data');
-    });
-
-    _socket!.on('user-left', (data) {
-      debugPrint('User left room: $data');
-    });
-
-    _socket!.on('room-users-updated', (data) {
-      try {
-        debugPrint('Raw room users data: $data');
-        List<String> users = [];
-        if (data is Map && data.containsKey('users')) {
-          users = List<String>.from(data['users'] ?? []);
-        } else if (data is List) {
-          users = List<String>.from(data);
-        }
-        debugPrint('Room users updated: $users');
-        _roomUsersStreamController.add(users);
-      } catch (e) {
-        debugPrint('Error parsing room users: $e');
-        debugPrint('Raw data: $data');
-      }
-    });
-
-    _socket!.on('error', (data) {
-      debugPrint('Server error: $data');
-      _errorStreamController.add(
-        'Server error: ${data is Map ? data['message'] ?? data : data}',
+      _connectionController.add(
+        ConnectionStatus(isConnected: false, message: 'Disconnected: $reason'),
       );
     });
 
-    debugPrint('All socket listeners set up');
-  }
-
-  Future<bool> _waitForConnection({int timeoutSeconds = 15}) async {
-    debugPrint('Waiting for connection (timeout: ${timeoutSeconds}s)...');
-    final completer = Completer<bool>();
-    Timer? timer;
-
-    // Listen for connection
-    StreamSubscription? subscription;
-    subscription = connectionStream.listen((connected) {
-      debugPrint('Connection stream event: $connected');
-      if (connected) {
-        timer?.cancel();
-        subscription?.cancel();
-        if (!completer.isCompleted) {
-          debugPrint('Connection successful!');
-          completer.complete(true);
-        }
-      }
+    _socket!.on('user-joined', (data) {
+      developer.log('User joined: ${data['userId']}');
+      _handleUserJoined(data);
     });
 
-    // Set timeout
-    timer = Timer(Duration(seconds: timeoutSeconds), () {
-      debugPrint('Connection timeout reached');
-      subscription?.cancel();
-      if (!completer.isCompleted) {
-        debugPrint('Connection timed out');
-        completer.complete(false);
-      }
+    _socket!.on('user-left', (data) {
+      developer.log('User left: ${data['userId']}');
+      _handleUserLeft(data);
     });
 
-    return completer.future;
-  }
-
-  void _joinRoom() {
-    debugPrint('=== Join Room ===');
-    debugPrint('Socket null check: ${_socket == null}');
-    debugPrint('Is connected: $_isConnected');
-    debugPrint('Room ID: "$_currentRoomId"');
-    debugPrint('User ID: "$_currentUserId"');
-
-    if (_socket == null ||
-        !_isConnected ||
-        _currentRoomId == null ||
-        _currentUserId == null) {
-      debugPrint('Cannot join room - missing requirements');
-      return;
-    }
-
-    debugPrint('Emitting join-room event...');
-    _socket!.emit('join-room', {
-      'roomId': _currentRoomId!,
-      'userId': _currentUserId!,
+    _socket!.on('error', (data) {
+      developer.log('Server error: ${data['message']}');
+      _errorController.add(data['message'] ?? 'Unknown server error');
     });
-    debugPrint('Join-room event emitted');
   }
 
-  // Send location via Socket.IO with HTTP fallback
-  Future<bool> sendLocationViaSocket({
+  // Set up location-related event listeners
+  void _setupLocationListeners() {
+    if (_socket == null) return;
+
+    _socket!.on('location-update', (data) {
+      developer.log('Location update received: ${data['userId']}');
+      _handleLocationUpdate(data);
+    });
+
+    _socket!.on('existing-locations', (data) {
+      developer.log('Existing locations received');
+      _handleExistingLocations(data);
+    });
+
+    _socket!.on('all-locations', (data) {
+      developer.log('All locations received');
+      _handleAllLocations(data);
+    });
+
+    _socket!.on('location-shared', (data) {
+      developer.log('Location shared successfully');
+      // Optional: Handle confirmation
+    });
+  }
+
+  // Handle successful room join
+  void _handleRoomJoined(Map<String, dynamic> data) {
+    _isConnected = true;
+    _currentRoomId = data['roomId'];
+    _currentUserId = data['userId'];
+    _roomUsers = List<String>.from(data['usersInRoom'] ?? []);
+
+    _connectionController.add(
+      ConnectionStatus(
+        isConnected: true,
+        roomId: _currentRoomId,
+        userId: _currentUserId,
+        message: data['message'],
+        roomUsers: _roomUsers,
+      ),
+    );
+
+    _roomUsersController.add(_roomUsers);
+  }
+
+  // Handle user joined event
+  void _handleUserJoined(Map<String, dynamic> data) {
+    String userId = data['userId'];
+    _roomUsers = List<String>.from(data['usersInRoom'] ?? []);
+
+    _roomUsersController.add(_roomUsers);
+
+    // Update connection status
+    _connectionController.add(
+      ConnectionStatus(
+        isConnected: true,
+        roomId: _currentRoomId,
+        userId: _currentUserId,
+        message: data['message'],
+        roomUsers: _roomUsers,
+      ),
+    );
+  }
+
+  // Handle user left event
+  void _handleUserLeft(Map<String, dynamic> data) {
+    String userId = data['userId'];
+    _roomUsers = List<String>.from(data['usersInRoom'] ?? []);
+
+    // Remove user's location
+    _userLocations.remove(userId);
+
+    _roomUsersController.add(_roomUsers);
+    _allLocationsController.add(Map.from(_userLocations));
+
+    // Update connection status
+    _connectionController.add(
+      ConnectionStatus(
+        isConnected: true,
+        roomId: _currentRoomId,
+        userId: _currentUserId,
+        message: data['message'],
+        roomUsers: _roomUsers,
+      ),
+    );
+  }
+
+  // Handle location update from another user
+  void _handleLocationUpdate(Map<String, dynamic> data) {
+    final location = UserLocation.fromJson(data);
+    _userLocations[location.userId] = location;
+
+    _locationUpdateController.add(location);
+    _allLocationsController.add(Map.from(_userLocations));
+  }
+
+  // Handle existing locations when joining room
+  void _handleExistingLocations(Map<String, dynamic> data) {
+    data.forEach((userId, locationData) {
+      final location = UserLocation.fromJson({
+        'userId': userId,
+        ...locationData,
+      });
+      _userLocations[userId] = location;
+    });
+
+    _allLocationsController.add(Map.from(_userLocations));
+  }
+
+  // Handle all locations response
+  void _handleAllLocations(Map<String, dynamic> data) {
+    _userLocations.clear();
+    data.forEach((userId, locationData) {
+      final location = UserLocation.fromJson({
+        'userId': userId,
+        ...locationData,
+      });
+      _userLocations[userId] = location;
+    });
+
+    _allLocationsController.add(Map.from(_userLocations));
+  }
+
+  // Handle connection errors
+  void _handleConnectionError(String error) {
+    _isConnected = false;
+    _connectionController.add(
+      ConnectionStatus(isConnected: false, message: error),
+    );
+    _errorController.add(error);
+  }
+
+  // Share current location with room
+  Future<bool> shareLocation({
     required double latitude,
     required double longitude,
   }) async {
+    if (!_isConnected || _socket == null) {
+      _errorController.add('Not connected to server');
+      return false;
+    }
+
+    if (_currentRoomId == null || _currentUserId == null) {
+      _errorController.add('Room or user ID not set');
+      return false;
+    }
+
     try {
-      debugPrint('=== Send Location Via Socket ===');
-      debugPrint('Socket: ${_socket != null ? "exists" : "null"}');
-      debugPrint('Connected: $_isConnected');
-      debugPrint('HTTP-only mode: $_httpOnlyMode');
-      debugPrint('Latitude: $latitude, Longitude: $longitude');
+      developer.log('Sharing location: $latitude, $longitude');
 
-      // If in HTTP-only mode or socket is not available, use HTTP
-      if (_httpOnlyMode || _socket == null || !_socket!.connected) {
-        debugPrint('Using HTTP fallback for location sending');
-        return await sendLocationViaHttp(
-          latitude: latitude,
-          longitude: longitude,
-        );
-      }
-
-      if (!_isConnected) {
-        debugPrint('Socket not connected');
-        _errorStreamController.add('Not connected to server');
-        return false;
-      }
-
-      _socket!.emit('send-location', {
+      _socket!.emit('share-location', {
+        'roomId': _currentRoomId,
+        'userId': _currentUserId,
         'latitude': latitude,
         'longitude': longitude,
       });
 
-      debugPrint('Location sent via socket');
-      return true;
-    } catch (e) {
-      debugPrint('Error sending location via socket: $e');
-      debugPrint('Trying HTTP fallback...');
-      return await sendLocationViaHttp(
+      // Update local location
+      final myLocation = UserLocation(
+        userId: _currentUserId!,
         latitude: latitude,
         longitude: longitude,
+        timestamp: DateTime.now().toIso8601String(),
       );
-    }
-  }
+      _userLocations[_currentUserId!] = myLocation;
+      _allLocationsController.add(Map.from(_userLocations));
 
-  // Send location via HTTP POST (alternative method)
-  Future<bool> sendLocationViaHttp({
-    required double latitude,
-    required double longitude,
-  }) async {
-    try {
-      debugPrint('=== Send Location Via HTTP ===');
-      debugPrint('Server URL: $_serverUrl');
-      debugPrint('Room ID: $_currentRoomId');
-      debugPrint('User ID: $_currentUserId');
-
-      if (_serverUrl == null ||
-          _currentRoomId == null ||
-          _currentUserId == null) {
-        debugPrint('Missing connection details for HTTP request');
-        _errorStreamController.add('Not connected to server');
-        return false;
-      }
-
-      final url = '${_serverUrl}send-location';
-      debugPrint('HTTP POST URL: $url');
-
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: jsonEncode({
-          'roomId': _currentRoomId,
-          'userId': _currentUserId,
-          'latitude': latitude,
-          'longitude': longitude,
-        }),
-      );
-
-      debugPrint('HTTP Response status: ${response.statusCode}');
-      debugPrint('HTTP Response body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        debugPrint('Location sent successfully via HTTP');
-        return true;
-      } else {
-        final error = 'Failed to send location: ${response.statusCode}';
-        debugPrint('$error');
-        _errorStreamController.add(error);
-        return false;
-      }
+      return true;
     } catch (e) {
-      debugPrint('Error sending location via HTTP: $e');
-      _errorStreamController.add('Failed to send location: $e');
+      developer.log('Error sharing location: $e');
+      _errorController.add('Failed to share location: $e');
       return false;
     }
   }
 
-  // Start HTTP polling for HTTP-only mode (simulates real-time updates)
-  void _startHttpPolling() {
-    if (_httpOnlyMode && _currentRoomId != null) {
-      debugPrint('Starting HTTP polling for room updates...');
-      _httpPollingTimer?.cancel();
-      _httpPollingTimer = Timer.periodic(Duration(seconds: 5), (timer) {
-        _pollForRoomUpdates();
-      });
+  // Request all current locations in room
+  Future<void> requestAllLocations() async {
+    if (!_isConnected || _socket == null || _currentRoomId == null) {
+      _errorController.add('Not connected to server or room');
+      return;
     }
-  }
-
-  // Stop HTTP polling
-  void _stopHttpPolling() {
-    _httpPollingTimer?.cancel();
-    _httpPollingTimer = null;
-    debugPrint('HTTP polling stopped');
-  }
-
-  // Poll for room updates (simplified - in real app you'd have a proper endpoint)
-  Future<void> _pollForRoomUpdates() async {
-    if (!_httpOnlyMode || _serverUrl == null || _currentRoomId == null) return;
 
     try {
-      // This is a simplified polling - in a real app, you'd have an endpoint
-      // that returns recent locations and room updates
-      debugPrint('Polling for room updates... (HTTP-only mode)');
-
-      // You could implement a /room-status endpoint on your server
-      // that returns recent locations and user lists
+      developer.log('Requesting all locations');
+      _socket!.emit('get-all-locations', {'roomId': _currentRoomId});
     } catch (e) {
-      debugPrint('Error during HTTP polling: $e');
+      developer.log('Error requesting locations: $e');
+      _errorController.add('Failed to get locations: $e');
     }
+  }
+
+  // Leave current room
+  Future<void> leaveRoom() async {
+    if (_socket != null && _isConnected) {
+      developer.log('Leaving room');
+      _socket!.emit('leave-room');
+    }
+
+    _isConnected = false;
+    _currentRoomId = null;
+    _currentUserId = null;
+    _roomUsers.clear();
+    _userLocations.clear();
+
+    _connectionController.add(
+      ConnectionStatus(isConnected: false, message: 'Left room'),
+    );
   }
 
   // Disconnect from server
   Future<void> disconnect() async {
-    debugPrint('=== Disconnect ===');
-
-    _stopHttpPolling(); // Stop HTTP polling
-
     if (_socket != null) {
-      debugPrint('Disconnecting socket...');
+      developer.log('Disconnecting from server');
+
+      await leaveRoom();
+
       _socket!.disconnect();
       _socket!.dispose();
       _socket = null;
-      debugPrint('Socket disconnected and disposed');
     }
 
-    _isConnected = false;
-    _httpOnlyMode = false;
-    _currentRoomId = null;
-    _currentUserId = null;
     _serverUrl = null;
-
-    _connectionStreamController.add(false);
-    debugPrint('Disconnect complete');
+    _isConnected = false;
   }
 
-  // Diagnostic method for troubleshooting
-  Future<void> diagnoseConnection() async {
+  // Check server health
+  Future<bool> checkServerHealth() async {
+    if (_serverUrl == null) return false;
+
     try {
-      debugPrint('=== Connection Diagnosis ===');
-      debugPrint('ServerURL null check: ${_serverUrl == null}');
-      debugPrint('ServerURL value: "$_serverUrl"');
-      debugPrint('RoomId null check: ${_currentRoomId == null}');
-      debugPrint('RoomId value: "$_currentRoomId"');
-      debugPrint('UserId null check: ${_currentUserId == null}');
-      debugPrint('UserId value: "$_currentUserId"');
-      debugPrint('Socket null check: ${_socket == null}');
-      debugPrint('Is connected: $_isConnected');
-
-      if (_serverUrl != null) {
-        debugPrint('ServerURL length: ${_serverUrl!.length}');
-        debugPrint(
-          'ServerURL contains https: ${_serverUrl!.contains('https')}',
-        );
-        debugPrint(
-          'ServerURL contains ngrok: ${_serverUrl!.contains('ngrok')}',
-        );
-      }
-
-      if (_socket != null) {
-        debugPrint('Socket ID: ${_socket!.id}');
-        debugPrint('Socket connected: ${_socket!.connected}');
-      }
-    } catch (e, stackTrace) {
-      debugPrint('Diagnosis error: $e');
-      debugPrint('Stack trace: $stackTrace');
+      // This would require http package for REST call to server health endpoint
+      // For now, just check socket connection
+      return _isConnected;
+    } catch (e) {
+      developer.log('Health check failed: $e');
+      return false;
     }
   }
 
-  // Clean up resources
-  void dispose() {
-    debugPrint('=== Dispose LocationService ===');
-    _stopHttpPolling();
-    disconnect();
-    _locationStreamController.close();
-    _connectionStreamController.close();
-    _errorStreamController.close();
-    _roomUsersStreamController.close();
-    debugPrint('LocationService disposed');
+  // Get specific user location
+  UserLocation? getUserLocation(String userId) {
+    return _userLocations[userId];
+  }
+
+  // Get current user's location
+  UserLocation? getMyLocation() {
+    if (_currentUserId == null) return null;
+    return _userLocations[_currentUserId!];
+  }
+
+  // Clear all stored locations
+  void clearLocations() {
+    _userLocations.clear();
+    _allLocationsController.add({});
+  }
+
+  // Dispose all resources
+  Future<void> dispose() async {
+    developer.log('Disposing LocationService');
+
+    await disconnect();
+
+    await _connectionController.close();
+    await _locationUpdateController.close();
+    await _allLocationsController.close();
+    await _roomUsersController.close();
+    await _errorController.close();
   }
 }
