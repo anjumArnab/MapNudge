@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import '../models/connection_status.dart';
+import '../models/user_location.dart';
+import '../services/location_service.dart';
 import '../views/map_view.dart';
 import '../widgets/custom_coordinate_fields.dart';
-import '../services/location_service.dart';
 
 class CoordinateView extends StatefulWidget {
   const CoordinateView({super.key});
@@ -12,7 +15,6 @@ class CoordinateView extends StatefulWidget {
 }
 
 class _CoordinateViewState extends State<CoordinateView> {
-  final LocationService _locationService = LocationService.instance;
   double? latitude;
   double? longitude;
   bool isGettingLocation = false;
@@ -22,49 +24,120 @@ class _CoordinateViewState extends State<CoordinateView> {
   final TextEditingController _latitudeController = TextEditingController();
   final TextEditingController _longitudeController = TextEditingController();
 
+  // LocationService instance
+  final LocationService _locationService = LocationService();
+
+  // Connection state
+  bool _isConnected = false;
+  String? _currentRoomId;
+  String? _currentUserId;
+  List<String> _roomUsers = [];
+  int _totalLocationsSent = 0;
+  DateTime? _lastLocationSent;
+
+  // Stream subscriptions
+  StreamSubscription<ConnectionStatus>? _connectionSubscription;
+  StreamSubscription<List<String>>? _roomUsersSubscription;
+  StreamSubscription<UserLocation>? _locationUpdateSubscription;
+  StreamSubscription<String>? _errorSubscription;
+
   @override
   void initState() {
     super.initState();
+    _setupLocationServiceListeners();
     _checkConnectionStatus();
   }
 
-  void _checkConnectionStatus() {
-    if (!_locationService.isConnected) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showNotConnectedDialog();
-      });
-    }
+  void _setupLocationServiceListeners() {
+    // Listen to connection status changes
+    _connectionSubscription = _locationService.connectionStream.listen((
+      connectionStatus,
+    ) {
+      if (mounted) {
+        setState(() {
+          _isConnected = connectionStatus.isConnected;
+          _currentRoomId = connectionStatus.roomId;
+          _currentUserId = connectionStatus.userId;
+          _roomUsers = connectionStatus.roomUsers;
+        });
+      }
+    });
+
+    // Listen to room users changes
+    _roomUsersSubscription = _locationService.roomUsersStream.listen((users) {
+      if (mounted) {
+        setState(() {
+          _roomUsers = users;
+        });
+      }
+    });
+
+    // Listen to location updates from other users
+    _locationUpdateSubscription = _locationService.locationUpdateStream.listen((
+      location,
+    ) {
+      if (mounted) {
+        _showLocationReceivedNotification(location);
+      }
+    });
+
+    // Listen to error messages
+    _errorSubscription = _locationService.errorStream.listen((error) {
+      if (mounted) {
+        _showErrorSnackBar(error);
+      }
+    });
   }
 
-  void _showNotConnectedDialog() {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Row(
-              children: [
-                Icon(Icons.warning, color: Colors.orange),
-                SizedBox(width: 8),
-                Text('Not Connected'),
-              ],
-            ),
-            content: Text(
-              'You are not connected to any server. Please go back to homepage and connect to a server first.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop(); // Close dialog
-                  Navigator.of(context).pop(); // Go back to homepage
-                },
-                child: Text('Go to Homepage'),
+  void _checkConnectionStatus() {
+    // Get current connection status from LocationService
+    setState(() {
+      _isConnected = _locationService.isConnected;
+      _currentRoomId = _locationService.currentRoomId;
+      _currentUserId = _locationService.currentUserId;
+      _roomUsers = _locationService.roomUsers;
+    });
+  }
+
+  void _showLocationReceivedNotification(UserLocation location) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.location_on, color: Colors.white, size: 20),
+            SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'New location from ${location.userId}',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    'Lat: ${location.latitude.toStringAsFixed(6)}, Lng: ${location.longitude.toStringAsFixed(6)}',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ],
               ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text('Continue Anyway'),
-              ),
-            ],
-          ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.blue.shade600,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 3),
+        action: SnackBarAction(
+          label: 'View Map',
+          textColor: Colors.white,
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const MapView()),
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -118,7 +191,7 @@ class _CoordinateViewState extends State<CoordinateView> {
       // Get current position
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10),
+        timeLimit: Duration(seconds: 15),
       );
 
       setState(() {
@@ -127,11 +200,17 @@ class _CoordinateViewState extends State<CoordinateView> {
         _latitudeController.text = latitude!.toStringAsFixed(6);
         _longitudeController.text = longitude!.toStringAsFixed(6);
         isGettingLocation = false;
-        locationStatus = "Location obtained successfully";
+        locationStatus =
+            "Location obtained successfully (accuracy: ${position.accuracy.toStringAsFixed(1)}m)";
       });
 
       // Show success message
       _showSuccessMessage();
+
+      // Auto-send location if connected
+      if (_isConnected) {
+        _showAutoSendDialog();
+      }
     } catch (e) {
       setState(() {
         isGettingLocation = false;
@@ -141,12 +220,68 @@ class _CoordinateViewState extends State<CoordinateView> {
     }
   }
 
+  void _showAutoSendDialog() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.send, color: Colors.green.shade600),
+                SizedBox(width: 8),
+                Text('Send Location?'),
+              ],
+            ),
+            content: Text(
+              'Would you like to send your current location to other users in the room?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Not Now'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _sendLocationToServer();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green.shade600,
+                ),
+                child: Text(
+                  'Send Location',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+    );
+  }
+
   void _showSuccessMessage() {
     if (latitude != null && longitude != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Current location obtained!\nLat: ${latitude!.toStringAsFixed(6)}, Lng: ${longitude!.toStringAsFixed(6)}',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Location obtained successfully!',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              SizedBox(height: 4),
+              Text(
+                'Lat: ${latitude!.toStringAsFixed(6)}, Lng: ${longitude!.toStringAsFixed(6)}',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
           ),
           backgroundColor: Colors.green.shade600,
           behavior: SnackBarBehavior.floating,
@@ -157,47 +292,84 @@ class _CoordinateViewState extends State<CoordinateView> {
   }
 
   Future<void> _sendLocationToServer() async {
-    if (!validateAndSave()) return;
-
-    if (!_locationService.isConnected) {
-      _showLocationError('Not connected to server. Please connect first.');
+    if (!_isConnected) {
+      _showErrorSnackBar('Not connected to server. Please connect first.');
       return;
     }
+
+    if (!validateAndSave()) return;
 
     setState(() {
       isSendingLocation = true;
     });
 
     try {
-      // Try sending via socket first, fallback to HTTP
-      bool success = await _locationService.sendLocationViaSocket(
+      // Send location using LocationService
+      final success = await _locationService.shareLocation(
         latitude: latitude!,
         longitude: longitude!,
       );
-
-      if (!success) {
-        // Fallback to HTTP method
-        success = await _locationService.sendLocationViaHttp(
-          latitude: latitude!,
-          longitude: longitude!,
-        );
-      }
 
       setState(() {
         isSendingLocation = false;
       });
 
       if (success) {
+        setState(() {
+          _totalLocationsSent++;
+          _lastLocationSent = DateTime.now();
+        });
         _showLocationSentSuccess();
+
+        // Auto-navigate to map after successful send
+        _showNavigateToMapDialog();
       } else {
-        _showLocationError('Failed to send location. Please try again.');
+        _showErrorSnackBar('Failed to send location. Please try again.');
       }
     } catch (e) {
       setState(() {
         isSendingLocation = false;
       });
-      _showLocationError('Error sending location: $e');
+      _showErrorSnackBar('Error sending location: $e');
     }
+  }
+
+  void _showNavigateToMapDialog() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.map, color: Colors.blue.shade600),
+                SizedBox(width: 8),
+                Text('View on Map?'),
+              ],
+            ),
+            content: Text(
+              'Location sent successfully! Would you like to view all locations on the map?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Stay Here'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const MapView()),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade600,
+                ),
+                child: Text('View Map', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+    );
   }
 
   void _showLocationSentSuccess() {
@@ -223,7 +395,7 @@ class _CoordinateViewState extends State<CoordinateView> {
               style: TextStyle(fontSize: 12),
             ),
             Text(
-              'Room: ${_locationService.currentRoomId ?? 'Unknown'}',
+              'Shared with ${_roomUsers.length - 1} other users',
               style: TextStyle(fontSize: 12),
             ),
           ],
@@ -239,10 +411,16 @@ class _CoordinateViewState extends State<CoordinateView> {
     _sendLocationToServer();
   }
 
-  void _showLocationError(String message) {
+  void _showErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Row(
+          children: [
+            Icon(Icons.error, color: Colors.white, size: 20),
+            SizedBox(width: 8),
+            Expanded(child: Text(message)),
+          ],
+        ),
         backgroundColor: Colors.red.shade600,
         behavior: SnackBarBehavior.floating,
         duration: Duration(seconds: 4),
@@ -250,8 +428,91 @@ class _CoordinateViewState extends State<CoordinateView> {
     );
   }
 
+  void _showLocationError(String message) {
+    _showErrorSnackBar(message);
+  }
+
+  void _showLocationStats() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.analytics, color: Colors.blue.shade600),
+                SizedBox(width: 8),
+                Text('Location Stats'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildStatRow('Locations Sent', '$_totalLocationsSent'),
+                _buildStatRow(
+                  'Last Sent',
+                  _lastLocationSent != null
+                      ? '${_lastLocationSent!.hour}:${_lastLocationSent!.minute.toString().padLeft(2, '0')}'
+                      : 'Never',
+                ),
+                _buildStatRow('Users in Room', '${_roomUsers.length}'),
+                _buildStatRow('Other Users', '${_roomUsers.length - 1}'),
+                if (_locationService.userLocations.isNotEmpty) ...[
+                  SizedBox(height: 8),
+                  Text(
+                    'Recent locations:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  ..._locationService.userLocations.entries
+                      .take(3)
+                      .map(
+                        (entry) => Padding(
+                          padding: EdgeInsets.only(left: 8, top: 2),
+                          child: Text(
+                            '${entry.key}: ${entry.value.latitude.toStringAsFixed(4)}, ${entry.value.longitude.toStringAsFixed(4)}',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Close'),
+              ),
+              if (_locationService.userLocations.isNotEmpty)
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const MapView()),
+                    );
+                  },
+                  child: Text('View All on Map'),
+                ),
+            ],
+          ),
+    );
+  }
+
+  Widget _buildStatRow(String label, String value) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label),
+          Text(value, style: TextStyle(fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildConnectionStatus() {
-    if (!_locationService.isConnected) {
+    if (!_isConnected) {
       return Container(
         padding: EdgeInsets.all(12),
         margin: EdgeInsets.only(bottom: 16),
@@ -283,6 +544,10 @@ class _CoordinateViewState extends State<CoordinateView> {
                 ],
               ),
             ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Connect', style: TextStyle(fontSize: 12)),
+            ),
           ],
         ),
       );
@@ -296,30 +561,131 @@ class _CoordinateViewState extends State<CoordinateView> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.green.shade300),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Connected to Server',
+                      style: TextStyle(
+                        color: Colors.green.shade700,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                    Text(
+                      'Room: $_currentRoomId | User: $_currentUserId',
+                      style: TextStyle(
+                        color: Colors.green.shade600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: _showLocationStats,
+                icon: Icon(Icons.analytics, size: 16),
+                tooltip: 'Location Stats',
+              ),
+            ],
+          ),
+          if (_roomUsers.length > 1) ...[
+            SizedBox(height: 8),
+            Row(
               children: [
+                Icon(Icons.people, color: Colors.green.shade600, size: 16),
+                SizedBox(width: 8),
                 Text(
-                  'Connected to Server',
+                  'Online (${_roomUsers.length}): ',
                   style: TextStyle(
-                    color: Colors.green.shade700,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
+                    color: Colors.green.shade600,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                Text(
-                  'Room: ${_locationService.currentRoomId} | User: ${_locationService.currentUserId}',
-                  style: TextStyle(color: Colors.green.shade600, fontSize: 12),
+                Expanded(
+                  child: Text(
+                    _roomUsers
+                        .where((user) => user != _currentUserId)
+                        .join(', '),
+                    style: TextStyle(
+                      color: Colors.green.shade600,
+                      fontSize: 12,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
-          ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildQuickActions() {
+    if (!_isConnected) return Container();
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: Padding(
+        padding: EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Text(
+              'Quick Actions',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.green.shade700,
+              ),
+            ),
+            SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _locationService.requestAllLocations(),
+                    icon: Icon(Icons.refresh, size: 16),
+                    label: Text('Refresh', style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange.shade600,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const MapView(),
+                        ),
+                      );
+                    },
+                    icon: Icon(Icons.map, size: 16),
+                    label: Text('View Map', style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade600,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -331,8 +697,22 @@ class _CoordinateViewState extends State<CoordinateView> {
       appBar: AppBar(
         backgroundColor: Colors.green.shade600,
         foregroundColor: Colors.white,
-        title: Text('Coordinate Sender'),
+        title: Text('Send Location'),
         actions: [
+          // Connection status indicator
+          Container(
+            margin: EdgeInsets.only(right: 8),
+            child: Center(
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: _isConnected ? Colors.greenAccent : Colors.redAccent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          ),
           // Navigation button to MapView
           IconButton(
             onPressed: () {
@@ -344,6 +724,13 @@ class _CoordinateViewState extends State<CoordinateView> {
             icon: Icon(Icons.map),
             tooltip: 'View Map',
           ),
+          // Location stats
+          if (_isConnected)
+            IconButton(
+              onPressed: _showLocationStats,
+              icon: Icon(Icons.analytics),
+              tooltip: 'Location Stats',
+            ),
         ],
       ),
       body: SingleChildScrollView(
@@ -358,18 +745,32 @@ class _CoordinateViewState extends State<CoordinateView> {
               // Connection Status
               _buildConnectionStatus(),
 
+              // Quick Actions (when connected)
+              _buildQuickActions(),
+
+              if (_isConnected) const SizedBox(height: 16),
+
               Text(
                 'MapNudge',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 32,
+                  fontSize: 28,
                   fontWeight: FontWeight.bold,
                   color: Colors.green.shade700,
                   letterSpacing: 1.2,
                 ),
               ),
 
-              const SizedBox(height: 32),
+              const SizedBox(height: 8),
+
+              if (_totalLocationsSent > 0)
+                Text(
+                  'Locations sent: $_totalLocationsSent',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: Colors.green.shade600),
+                ),
+
+              const SizedBox(height: 24),
 
               // Current Location Section
               Column(
@@ -418,18 +819,38 @@ class _CoordinateViewState extends State<CoordinateView> {
                   ),
                   if (locationStatus != null) ...[
                     const SizedBox(height: 8),
-                    Text(
-                      locationStatus!,
-                      style: TextStyle(
-                        fontSize: 12,
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
                         color:
                             locationStatus!.contains('Error') ||
                                     locationStatus!.contains('denied') ||
                                     locationStatus!.contains('disabled')
-                                ? Colors.red.shade600
-                                : Colors.green.shade600,
+                                ? Colors.red.shade50
+                                : Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color:
+                              locationStatus!.contains('Error') ||
+                                      locationStatus!.contains('denied') ||
+                                      locationStatus!.contains('disabled')
+                                  ? Colors.red.shade300
+                                  : Colors.green.shade300,
+                        ),
                       ),
-                      textAlign: TextAlign.center,
+                      child: Text(
+                        locationStatus!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color:
+                              locationStatus!.contains('Error') ||
+                                      locationStatus!.contains('denied') ||
+                                      locationStatus!.contains('disabled')
+                                  ? Colors.red.shade600
+                                  : Colors.green.shade600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ],
                 ],
@@ -472,7 +893,7 @@ class _CoordinateViewState extends State<CoordinateView> {
                   CustomCoordinateField(
                     controller: _latitudeController,
                     label: 'Latitude',
-                    hint: 'Enter latitude',
+                    hint: 'Enter latitude (-90 to 90)',
                     minValue: -90,
                     maxValue: 90,
                     icon: Icons.location_on,
@@ -484,7 +905,7 @@ class _CoordinateViewState extends State<CoordinateView> {
                   CustomCoordinateField(
                     controller: _longitudeController,
                     label: 'Longitude',
-                    hint: 'Enter longitude',
+                    hint: 'Enter longitude (-180 to 180)',
                     minValue: -180,
                     maxValue: 180,
                     icon: Icons.location_on,
@@ -502,7 +923,8 @@ class _CoordinateViewState extends State<CoordinateView> {
                       onPressed:
                           (isSendingLocation ||
                                   latitude == null ||
-                                  longitude == null)
+                                  longitude == null ||
+                                  !_isConnected)
                               ? null
                               : _sendManualLocation,
                       icon:
@@ -521,11 +943,16 @@ class _CoordinateViewState extends State<CoordinateView> {
                       label: Text(
                         isSendingLocation
                             ? 'Sending Location...'
-                            : 'Send Location',
+                            : !_isConnected
+                            ? 'Connect to Server First'
+                            : 'Send Location to Room',
                         style: TextStyle(fontSize: 16),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue.shade600,
+                        backgroundColor:
+                            !_isConnected
+                                ? Colors.grey.shade400
+                                : Colors.blue.shade600,
                         foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
@@ -533,10 +960,48 @@ class _CoordinateViewState extends State<CoordinateView> {
                       ),
                     ),
                   ),
+
+                  if (latitude != null && longitude != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Ready to send: ${latitude!.toStringAsFixed(6)}, ${longitude!.toStringAsFixed(6)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.green.shade600,
+                        fontStyle: FontStyle.italic,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ],
               ),
 
-              const SizedBox(height: 24), // Add some bottom padding
+              const SizedBox(height: 24),
+
+              // Help text
+              if (!_isConnected)
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade300),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(Icons.info, color: Colors.blue.shade600),
+                      SizedBox(height: 8),
+                      Text(
+                        'Connect to server first to share your location with other users in real-time!',
+                        style: TextStyle(
+                          color: Colors.blue.shade700,
+                          fontSize: 12,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
@@ -548,6 +1013,13 @@ class _CoordinateViewState extends State<CoordinateView> {
   void dispose() {
     _latitudeController.dispose();
     _longitudeController.dispose();
+
+    // Cancel stream subscriptions
+    _connectionSubscription?.cancel();
+    _roomUsersSubscription?.cancel();
+    _locationUpdateSubscription?.cancel();
+    _errorSubscription?.cancel();
+
     super.dispose();
   }
 
