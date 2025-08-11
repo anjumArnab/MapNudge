@@ -37,10 +37,9 @@ class _HomepageState extends State<Homepage> {
     super.initState();
 
     // Set default values for testing
-    _serverUrlController.text = 'https://your-ngrok-url.ngrok.io';
-    _roomIdController.text = 'room123';
-    _userIdController.text =
-        'user${DateTime.now().millisecondsSinceEpoch % 1000}';
+    _serverUrlController.text = '';
+    _roomIdController.text = '';
+    _userIdController.text = '';
 
     // Initialize LocationService listeners
     _setupLocationServiceListeners();
