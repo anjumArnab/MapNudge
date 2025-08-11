@@ -583,8 +583,10 @@ class _HomepageState extends State<Homepage> {
               if (_isConnected) ...[
                 // Send Location Button
                 ActionButton(
-                  icon: Icons.send,
                   label: 'Send Location',
+                  icon: Icons.send,
+                  backgroundColor: Colors.green.shade600,
+                  foregroundColor: Colors.white,
                   onPressed: () {
                     Navigator.push(
                       context,
@@ -597,8 +599,10 @@ class _HomepageState extends State<Homepage> {
 
                 // View Map Button
                 ActionButton(
-                  icon: Icons.map,
                   label: 'View Map',
+                  icon: Icons.map,
+                  backgroundColor: Colors.blue.shade600,
+                  foregroundColor: Colors.white,
                   onPressed: () {
                     Navigator.push(
                       context,
@@ -625,41 +629,6 @@ class _HomepageState extends State<Homepage> {
                       ),
                     ),
                   ],
-                ),
-              ],
-
-              // Instructions when not connected
-              if (!_isConnected && !_isConnecting) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.shade300),
-                  ),
-                  child: Column(
-                    children: [
-                      Icon(Icons.info, color: Colors.blue.shade600),
-                      SizedBox(height: 8),
-                      Text(
-                        'How to connect:',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue.shade700,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        '1. Start your Node.js server\n2. Run ngrok to get public URL\n3. Enter the ngrok URL above\n4. Choose a room ID and your name\n5. Share room ID with friends',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.blue.shade700,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
                 ),
               ],
             ],

@@ -835,23 +835,30 @@ class _CoordinateViewState extends State<CoordinateView> {
                   ),
                   const SizedBox(height: 20),
 
+                  // Send Location to Room (with loading & disabled state)
                   ActionButton(
-                    icon: Icons.send,
                     label:
                         isSendingLocation
                             ? 'Sending Location...'
                             : !_isConnected
                             ? 'Connect to Server First'
                             : 'Send Location to Room',
-
+                    icon: Icons.send,
+                    backgroundColor:
+                        !_isConnected
+                            ? Colors.grey.shade400
+                            : Colors.blue.shade600,
+                    foregroundColor: Colors.white,
+                    isLoading: isSendingLocation,
                     onPressed:
-                        () =>
-                            (isSendingLocation ||
-                                    latitude == null ||
-                                    longitude == null ||
-                                    !_isConnected)
-                                ? null
-                                : _sendManualLocation,
+                        (isSendingLocation ||
+                                latitude == null ||
+                                longitude == null ||
+                                !_isConnected)
+                            ? null
+                            : _sendManualLocation,
+                    height: 50,
+                    borderRadius: 8,
                   ),
                 ],
               ),
