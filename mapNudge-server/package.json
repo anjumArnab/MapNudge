@@ -1,5 +1,5 @@
 {
-  "name": "location-sharing-server",
+  "name": "mapNudge-server",
   "version": "1.0.0",
   "description": "Real-time location sharing server for Flutter app",
   "main": "server.js",
