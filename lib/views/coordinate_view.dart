@@ -147,7 +147,7 @@ class _CoordinateViewState extends State<CoordinateView> {
   Future<void> _getCurrentLocation() async {
     setState(() {
       isGettingLocation = true;
-      locationStatus = "Getting current location...";
+      locationStatus = "Checking location services...";
     });
 
     try {
@@ -158,15 +158,24 @@ class _CoordinateViewState extends State<CoordinateView> {
           isGettingLocation = false;
           locationStatus = "Location services are disabled";
         });
-        _showLocationError(
-          "Location services are disabled. Please enable location services.",
-        );
+
+        // Show dialog to enable location services
+        _showLocationServiceDialog();
         return;
       }
 
+      setState(() {
+        locationStatus = "Checking location permissions...";
+      });
+
       // Check location permission
       LocationPermission permission = await Geolocator.checkPermission();
+
       if (permission == LocationPermission.denied) {
+        setState(() {
+          locationStatus = "Requesting location permission...";
+        });
+
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
           setState(() {
@@ -174,7 +183,7 @@ class _CoordinateViewState extends State<CoordinateView> {
             locationStatus = "Location permission denied";
           });
           _showLocationError(
-            "Location permissions are denied. Please grant location permission.",
+            "Location permissions are denied. Please grant location permission in your device settings.",
           );
           return;
         }
@@ -185,16 +194,23 @@ class _CoordinateViewState extends State<CoordinateView> {
           isGettingLocation = false;
           locationStatus = "Location permission permanently denied";
         });
-        _showLocationError(
-          "Location permissions are permanently denied. Please enable them in settings.",
-        );
+        _showLocationPermissionDialog();
         return;
       }
 
-      // Get current position
+      setState(() {
+        locationStatus = "Getting your location...";
+      });
+
+      // Get current position with timeout
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 15),
+        timeLimit: Duration(seconds: 30), // Increased timeout for Android
+      ).timeout(
+        Duration(seconds: 35),
+        onTimeout: () {
+          throw Exception('Location request timed out. Please try again.');
+        },
       );
 
       setState(() {
@@ -209,52 +225,116 @@ class _CoordinateViewState extends State<CoordinateView> {
 
       // Show success message
       _showSuccessMessage();
-
-      // Auto-send location if connected
-      if (_isConnected) {
-        _showAutoSendDialog();
-      }
     } catch (e) {
       setState(() {
         isGettingLocation = false;
         locationStatus = "Error getting location: ${e.toString()}";
       });
-      _showLocationError("Error getting current location: ${e.toString()}");
+
+      String errorMessage = e.toString();
+      if (errorMessage.contains('permissions')) {
+        _showLocationPermissionDialog();
+      } else if (errorMessage.contains('timeout')) {
+        _showLocationTimeoutDialog();
+      } else {
+        _showLocationError("Error getting current location: $errorMessage");
+      }
     }
   }
 
-  void _showAutoSendDialog() {
+  void _showLocationServiceDialog() {
     showDialog(
       context: context,
       builder:
           (context) => AlertDialog(
             title: Row(
               children: [
-                Icon(Icons.send, color: Colors.green.shade600),
+                Icon(Icons.location_off, color: Colors.orange.shade600),
                 SizedBox(width: 8),
-                Text('Send Location?'),
+                Text('Enable Location'),
               ],
             ),
             content: Text(
-              'Would you like to send your current location to other users in the room?',
+              'Please enable location services in your device settings to get your current location.',
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: Text('Not Now'),
+                child: Text('Ok'),
+              ),
+            ],
+          ),
+    );
+  }
+
+  void _showLocationPermissionDialog() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.warning, color: Colors.red.shade600),
+                SizedBox(width: 8),
+                Text('Location Permission Required'),
+              ],
+            ),
+            content: Text(
+              'This app needs location permission to get your current coordinates. Please grant location permission in your device settings.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  // Open app settings
+                  await Geolocator.openAppSettings();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade600,
+                ),
+                child: Text(
+                  'Open Settings',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+    );
+  }
+
+  void _showLocationTimeoutDialog() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.access_time, color: Colors.orange.shade600),
+                SizedBox(width: 8),
+                Text('Location Timeout'),
+              ],
+            ),
+            content: Text(
+              'Getting your location is taking longer than expected. Please make sure:\n\n'
+              '• You are in an area with good GPS signal\n'
+              '• Location services are enabled\n'
+              '• You are not indoors or under heavy cover',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Cancel'),
               ),
               ElevatedButton(
                 onPressed: () {
                   Navigator.of(context).pop();
-                  _sendLocationToServer();
+                  _getCurrentLocation(); // Retry
                 },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade600,
-                ),
-                child: Text(
-                  'Send Location',
-                  style: TextStyle(color: Colors.white),
-                ),
+                child: Text('Try Again'),
               ),
             ],
           ),
@@ -323,9 +403,6 @@ class _CoordinateViewState extends State<CoordinateView> {
           _lastLocationSent = DateTime.now();
         });
         _showLocationSentSuccess();
-
-        // Auto-navigate to map after successful send
-        _showNavigateToMapDialog();
       } else {
         _showErrorSnackBar('Failed to send location. Please try again.');
       }
@@ -335,44 +412,6 @@ class _CoordinateViewState extends State<CoordinateView> {
       });
       _showErrorSnackBar('Error sending location: $e');
     }
-  }
-
-  void _showNavigateToMapDialog() {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Row(
-              children: [
-                Icon(Icons.map, color: Colors.blue.shade600),
-                SizedBox(width: 8),
-                Text('View on Map?'),
-              ],
-            ),
-            content: Text(
-              'Location sent successfully! Would you like to view all locations on the map?',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text('Stay Here'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const MapView()),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue.shade600,
-                ),
-                child: Text('View Map', style: TextStyle(color: Colors.white)),
-              ),
-            ],
-          ),
-    );
   }
 
   void _showLocationSentSuccess() {
@@ -631,7 +670,6 @@ class _CoordinateViewState extends State<CoordinateView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.green.shade50,
       appBar: AppBar(
         backgroundColor: Colors.green.shade600,
         foregroundColor: Colors.white,

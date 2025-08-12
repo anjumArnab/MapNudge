@@ -874,6 +874,7 @@ class _MapViewState extends State<MapView> {
             FloatingActionButton(
               heroTag: "show_all_locations",
               mini: true,
+              shape: CircleBorder(),
               onPressed: _showAllLocations,
               backgroundColor: Colors.purple.shade600,
               tooltip: 'Show All Locations',
@@ -884,6 +885,7 @@ class _MapViewState extends State<MapView> {
           FloatingActionButton(
             heroTag: "refresh_data",
             mini: true,
+            shape: CircleBorder(),
             onPressed: _refreshData,
             backgroundColor: Colors.blue.shade600,
             tooltip: 'Refresh Data',
@@ -893,6 +895,7 @@ class _MapViewState extends State<MapView> {
           // Refresh current location button
           FloatingActionButton(
             heroTag: "refresh_current_location",
+            shape: CircleBorder(),
             onPressed: () async {
               await _getCurrentLocation();
               if (_userLocations.isNotEmpty) {

@@ -530,17 +530,10 @@ class _HomepageState extends State<Homepage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.green.shade50,
       appBar: AppBar(
-        title: Text('MapNudge'),
-        actions: [
-          if (_isConnected)
-            IconButton(
-              icon: Icon(Icons.info_outline),
-              onPressed: _showConnectionInfo,
-              tooltip: 'Connection Info',
-            ),
-        ],
+        backgroundColor: Colors.green.shade600,
+        foregroundColor: Colors.white,
+        title: Text('Map Nudge'),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -583,26 +576,6 @@ class _HomepageState extends State<Homepage> {
                       MaterialPageRoute(builder: (context) => MapView()),
                     );
                   },
-                ),
-
-                const SizedBox(height: 16),
-
-                // Quick actions row
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () => _locationService.requestAllLocations(),
-                        icon: Icon(Icons.refresh, size: 18),
-                        label: Text('Refresh Locations'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange.shade600,
-                          foregroundColor: Colors.white,
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ],
