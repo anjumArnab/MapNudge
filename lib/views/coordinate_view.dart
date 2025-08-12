@@ -3,12 +3,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import '../widgets/app_text_field.dart';
 import '../widgets/action_button.dart';
 import '../models/connection_status.dart';
 import '../models/user_location.dart';
 import '../services/location_service.dart';
 import '../views/map_view.dart';
-import '../widgets/coordinate_fields.dart';
 
 class CoordinateView extends StatefulWidget {
   const CoordinateView({super.key});
@@ -810,27 +810,29 @@ class _CoordinateViewState extends State<CoordinateView> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  CoordinateField(
+
+                  AppTextField(
                     controller: _latitudeController,
                     label: 'Latitude',
                     hint: 'Enter latitude (-90 to 90)',
+                    icon: Icons.location_on,
                     minValue: -90,
                     maxValue: 90,
-                    icon: Icons.location_on,
                     onSaved: (value) {
                       latitude = double.parse(value!);
                     },
                   ),
+
                   const SizedBox(height: 16),
-                  CoordinateField(
+                  AppTextField(
                     controller: _longitudeController,
                     label: 'Longitude',
                     hint: 'Enter longitude (-180 to 180)',
+                    icon: Icons.location_on,
                     minValue: -180,
                     maxValue: 180,
-                    icon: Icons.location_on,
                     onSaved: (value) {
-                      longitude = double.parse(value!);
+                      latitude = double.parse(value!);
                     },
                   ),
                   const SizedBox(height: 20),

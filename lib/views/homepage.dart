@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../widgets/app_text_field.dart';
 import '../widgets/action_button.dart';
 import '../models/connection_status.dart';
 import '../services/location_service.dart';
@@ -379,17 +380,12 @@ class _HomepageState extends State<Homepage> {
           const SizedBox(height: 16),
 
           // Server URL field
-          TextField(
+          AppTextField(
             controller: _serverUrlController,
-            decoration: InputDecoration(
-              labelText: 'Server URL (ngrok)',
-              hintText: 'https://abc123.ngrok.io',
-              prefixIcon: Icon(Icons.cloud),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              helperText: 'Use your ngrok URL here',
-            ),
+            label: 'Server URL (ngrok)',
+            hint: 'https://abc123.ngrok.io',
+            icon: Icons.cloud,
+            helperText: 'Use your ngrok URL here',
             enabled: !_isConnected && !_isConnecting,
             keyboardType: TextInputType.url,
           ),
@@ -397,34 +393,24 @@ class _HomepageState extends State<Homepage> {
           const SizedBox(height: 12),
 
           // Room ID field
-          TextField(
+          AppTextField(
             controller: _roomIdController,
-            decoration: InputDecoration(
-              labelText: 'Room ID',
-              hintText: 'Enter room ID to share with friends',
-              prefixIcon: Icon(Icons.meeting_room),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              helperText: 'Share this ID with others to connect',
-            ),
+            label: 'Room ID',
+            hint: 'Enter room ID to share with friends',
+            icon: Icons.cloud,
+            helperText: 'Share this ID with others to connect',
             enabled: !_isConnected && !_isConnecting,
           ),
 
           const SizedBox(height: 12),
 
           // User ID field
-          TextField(
+          AppTextField(
             controller: _userIdController,
-            decoration: InputDecoration(
-              labelText: 'Your Name/ID',
-              hintText: 'Enter your unique identifier',
-              prefixIcon: Icon(Icons.person),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              helperText: 'Letters, numbers, and underscores only',
-            ),
+            label: 'Your Name/ID',
+            hint: 'Enter your unique identifier',
+            icon: Icons.person,
+            helperText: 'Letters, numbers, and underscores only',
             enabled: !_isConnected && !_isConnecting,
             maxLength: 20,
           ),
@@ -545,34 +531,23 @@ class _HomepageState extends State<Homepage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.green.shade50,
+      appBar: AppBar(
+        title: Text('MapNudge'),
+        actions: [
+          if (_isConnected)
+            IconButton(
+              icon: Icon(Icons.info_outline),
+              onPressed: _showConnectionInfo,
+              tooltip: 'Connection Info',
+            ),
+        ],
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // App Icon and Title
-              Icon(Icons.location_on, size: 80, color: Colors.green.shade600),
-              const SizedBox(height: 16),
-
-              Text(
-                'MapNudge',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green.shade700,
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              Text(
-                'Real-time Location Sharing',
-                style: TextStyle(fontSize: 16, color: Colors.green.shade600),
-              ),
-
-              const SizedBox(height: 32),
-
               // Connection Section
               _buildConnectionSection(),
 
