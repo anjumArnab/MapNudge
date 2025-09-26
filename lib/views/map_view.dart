@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
-import '../views/coordinate_view.dart';
+import 'package:map_nudge/OPEN_ROUTE_SERVICE.dart';
 import '../services/location_service.dart';
 import '../models/user_location.dart';
 import '../models/connection_status.dart';
@@ -535,18 +535,14 @@ class _MapViewState extends State<MapView> {
       polylineCoordinates.add(currentLocation!);
       polylineCoordinates.add(destination);
 
-      /* Uncomment this section when you have a Google Maps API key
       PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-        googleApiKey: "YOUR_GOOGLE_MAPS_API_KEY", // Replace with your actual API key
+        googleApiKey: openRouteServiceApiKey,
         request: PolylineRequest(
           origin: PointLatLng(
             currentLocation!.latitude,
             currentLocation!.longitude,
           ),
-          destination: PointLatLng(
-            destination.latitude,
-            destination.longitude,
-          ),
+          destination: PointLatLng(destination.latitude, destination.longitude),
           mode: TravelMode.driving,
         ),
       );
@@ -562,7 +558,6 @@ class _MapViewState extends State<MapView> {
         polylineCoordinates.add(currentLocation!);
         polylineCoordinates.add(destination);
       }
-      */
     } catch (e) {
       print('Error creating polyline to $userId: $e');
       // Fallback to straight line
@@ -735,20 +730,7 @@ class _MapViewState extends State<MapView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: [
-            Text('Map View'),
-            SizedBox(width: 8),
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: _isConnected ? Colors.greenAccent : Colors.redAccent,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ],
-        ),
+        title: Text('Map View'),
         backgroundColor: Colors.green.shade600,
         foregroundColor: Colors.white,
         actions: [
@@ -757,17 +739,6 @@ class _MapViewState extends State<MapView> {
             onPressed: _showConnectionInfo,
             icon: Icon(_isConnected ? Icons.wifi : Icons.wifi_off),
             tooltip: 'Connection Info',
-          ),
-          // Navigation button to CoordinateView
-          IconButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const CoordinateView()),
-              );
-            },
-            icon: Icon(Icons.send),
-            tooltip: 'Send Location',
           ),
         ],
       ),
@@ -866,6 +837,7 @@ class _MapViewState extends State<MapView> {
                     ),
                 ],
               ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
