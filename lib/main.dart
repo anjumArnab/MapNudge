@@ -14,7 +14,10 @@ class MapNudge extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'MapNudge',
-      theme: ThemeData(textTheme: GoogleFonts.poppinsTextTheme()),
+      theme: ThemeData(
+        scaffoldBackgroundColor: Color(0XFFF5F5F5),
+        textTheme: GoogleFonts.poppinsTextTheme(),
+      ),
       home: Homepage(),
     );
   }
