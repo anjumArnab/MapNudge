@@ -19,6 +19,10 @@ class _HomepageState extends State<Homepage> {
   final TextEditingController _roomIdController = TextEditingController();
   final TextEditingController _userIdController = TextEditingController();
 
+  // Page controller for swipe functionality
+  final PageController _pageController = PageController();
+  int _currentPage = 0;
+
   // LocationService instance
   final LocationService _locationService = LocationService();
 
@@ -61,6 +65,8 @@ class _HomepageState extends State<Homepage> {
 
             if (connectionStatus.isConnected) {
               _isConnecting = false;
+              // Auto-navigate to third section when connected
+              _animateToPage(2);
             }
           });
 
@@ -124,6 +130,14 @@ class _HomepageState extends State<Homepage> {
         }
       });
     }
+  }
+
+  void _animateToPage(int page) {
+    _pageController.animateToPage(
+      page,
+      duration: Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
   }
 
   Future<void> _connectToServer() async {
@@ -200,6 +214,8 @@ class _HomepageState extends State<Homepage> {
         _roomUsers.clear();
       });
 
+      // Navigate back to connection section after disconnect
+      _animateToPage(1);
       _showSuccessSnackBar('Disconnected successfully');
     } catch (e) {
       setState(() {
@@ -281,101 +297,71 @@ class _HomepageState extends State<Homepage> {
     );
   }
 
-  void _showConnectionInfo() {
-    if (!_isConnected) return;
-
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Row(
-              children: [
-                Icon(Icons.info, color: Colors.blue.shade600),
-                SizedBox(width: 8),
-                Text('Connection Info'),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildInfoRow(
-                  'Server',
-                  _locationService.serverUrl ?? 'Unknown',
-                ),
-                _buildInfoRow(
-                  'Room ID',
-                  _locationService.currentRoomId ?? 'Unknown',
-                ),
-                _buildInfoRow(
-                  'Your ID',
-                  _locationService.currentUserId ?? 'Unknown',
-                ),
-                _buildInfoRow('Users Online', '${_roomUsers.length}'),
-                SizedBox(height: 8),
-                Text(
-                  'Users in room:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                SizedBox(height: 4),
-                ..._roomUsers.map((user) => Text('• $user')).toList(),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text('Close'),
-              ),
-            ],
-          ),
-    );
-  }
-
-  Widget _buildInfoRow(String label, String value) {
+  // Section 1: App Introduction
+  Widget _buildIntroSection() {
     return Padding(
-      padding: EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 70,
-            child: Text(
-              '$label:',
-              style: TextStyle(fontWeight: FontWeight.w500),
+          // App Title
+          Text(
+            'Map Nudge',
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.bold,
+              color: Colors.green.shade700,
             ),
           ),
-          Expanded(
-            child: Text(value, style: TextStyle(color: Colors.grey.shade700)),
+
+          SizedBox(height: 16),
+
+          // App Description
+          Text(
+            'Map Nudge is a location sharing application. First establish connection with server and share your location then show it on map.',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey.shade600,
+              height: 1.5,
+            ),
+            textAlign: TextAlign.center,
+          ),
+
+          SizedBox(height: 48),
+
+          // Get Started Button
+          ElevatedButton.icon(
+            onPressed: () => _animateToPage(1),
+            label: Text('Get Started'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green.shade600,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              textStyle: TextStyle(fontSize: 16),
+            ),
           ),
         ],
       ),
     );
   }
 
+  // Section 2: Connection Section (existing _buildConnectionSection)
   Widget _buildConnectionSection() {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Server Connection',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green.shade700,
-                ),
-              ),
-              if (_isConnected)
-                IconButton(
-                  onPressed: _showConnectionInfo,
-                  icon: Icon(Icons.info_outline),
-                  tooltip: 'Connection Info',
-                ),
-            ],
+          Text(
+            'Server Connection',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.green.shade700,
+            ),
           ),
           const SizedBox(height: 16),
 
@@ -453,76 +439,98 @@ class _HomepageState extends State<Homepage> {
               ),
             ),
           ),
-
-          // Connection status
-          if (_connectionStatus != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding: EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: _isConnected ? Colors.green.shade50 : Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color:
-                      _isConnected
-                          ? Colors.green.shade300
-                          : Colors.red.shade300,
-                ),
-              ),
-              child: Row(
-                children: [
-                  _isConnecting
-                      ? SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.blue.shade600,
-                        ),
-                      )
-                      : Icon(
-                        _isConnected ? Icons.check_circle : Icons.error,
-                        color:
-                            _isConnected
-                                ? Colors.green.shade600
-                                : Colors.red.shade600,
-                        size: 16,
-                      ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _connectionStatus!,
-                      style: TextStyle(
-                        color:
-                            _isConnected
-                                ? Colors.green.shade600
-                                : Colors.red.shade600,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          // Health check button (optional)
-          if (_isConnected) ...[
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: () async {
-                final isHealthy = await _locationService.checkServerHealth();
-                _showSuccessSnackBar(
-                  isHealthy
-                      ? 'Server connection is healthy'
-                      : 'Server connection issues detected',
-                );
-              },
-              icon: Icon(Icons.health_and_safety, size: 16),
-              label: Text('Check Connection', style: TextStyle(fontSize: 12)),
-            ),
-          ],
         ],
+      ),
+    );
+  }
+
+  // Section 3: Actions Section
+  Widget _buildActionsSection() {
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Room Info
+          Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  'Room: ${_locationService.currentRoomId ?? "Unknown"}',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  '${_roomUsers.length} user(s) online',
+                  style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                ),
+              ],
+            ),
+          ),
+
+          SizedBox(height: 48),
+
+          // Send Location Button
+          ActionButton(
+            label: 'Send Location',
+            icon: Icons.send,
+            backgroundColor: Colors.green.shade600,
+            foregroundColor: Colors.white,
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => CoordinateView()),
+              );
+            },
+          ),
+
+          const SizedBox(height: 16),
+
+          // View Map Button
+          ActionButton(
+            label: 'View Map',
+            icon: Icons.map,
+            backgroundColor: Colors.blue.shade600,
+            foregroundColor: Colors.white,
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => MapView()),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Page Indicator Dots
+  Widget _buildPageIndicator() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(
+        _isConnected ? 3 : 2, // Show 3 dots only when connected
+        (index) => Container(
+          margin: EdgeInsets.symmetric(horizontal: 4),
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color:
+                _currentPage == index
+                    ? Colors.green.shade600
+                    : Colors.grey.shade300,
+          ),
+        ),
       ),
     );
   }
@@ -535,52 +543,44 @@ class _HomepageState extends State<Homepage> {
         foregroundColor: Colors.white,
         title: Text('Map Nudge'),
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Connection Section
-              _buildConnectionSection(),
+      body: Column(
+        children: [
+          Expanded(
+            child: PageView(
+              controller: _pageController,
+              onPageChanged: (index) {
+                // Prevent accessing third page if not connected
+                if (index == 2 && !_isConnected) {
+                  _animateToPage(_currentPage);
+                  return;
+                }
+                setState(() {
+                  _currentPage = index;
+                });
+              },
+              children: [
+                // Section 1: App Introduction
+                SafeArea(child: _buildIntroSection()),
 
-              const SizedBox(height: 32),
-
-              // Navigation Buttons (only show when connected)
-              if (_isConnected) ...[
-                // Send Location Button
-                ActionButton(
-                  label: 'Send Location',
-                  icon: Icons.send,
-                  backgroundColor: Colors.green.shade600,
-                  foregroundColor: Colors.white,
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => CoordinateView()),
-                    );
-                  },
+                // Section 2: Connection Section
+                SafeArea(
+                  child: SingleChildScrollView(
+                    child: _buildConnectionSection(),
+                  ),
                 ),
 
-                const SizedBox(height: 16),
-
-                // View Map Button
-                ActionButton(
-                  label: 'View Map',
-                  icon: Icons.map,
-                  backgroundColor: Colors.blue.shade600,
-                  foregroundColor: Colors.white,
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => MapView()),
-                    );
-                  },
-                ),
+                // Section 3: Actions Section (only accessible when connected)
+                if (_isConnected) SafeArea(child: _buildActionsSection()),
               ],
-            ],
+            ),
           ),
-        ),
+
+          // Page Indicator
+          Container(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: _buildPageIndicator(),
+          ),
+        ],
       ),
     );
   }
@@ -590,6 +590,7 @@ class _HomepageState extends State<Homepage> {
     _serverUrlController.dispose();
     _roomIdController.dispose();
     _userIdController.dispose();
+    _pageController.dispose();
 
     // Cancel stream subscriptions
     _connectionSubscription?.cancel();
