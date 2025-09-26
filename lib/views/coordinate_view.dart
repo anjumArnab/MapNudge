@@ -675,20 +675,6 @@ class _CoordinateViewState extends State<CoordinateView> {
         foregroundColor: Colors.white,
         title: Text('Send Location'),
         actions: [
-          // Connection status indicator
-          Container(
-            margin: EdgeInsets.only(right: 8),
-            child: Center(
-              child: Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: _isConnected ? Colors.greenAccent : Colors.redAccent,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-          ),
           // Navigation button to MapView
           IconButton(
             onPressed: () {
