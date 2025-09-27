@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import '../services/location_service.dart';
 import '../models/user_location.dart';
 import '../models/connection_status.dart';
@@ -17,19 +18,30 @@ class MapView extends StatefulWidget {
 
 class _MapViewState extends State<MapView> {
   late Map<MarkerId, Marker> _markers;
+  late Map<PolylineId, Polyline> _polylines;
   final Completer<GoogleMapController> _controller = Completer();
   LatLng? currentLocation;
   bool isLoadingLocation = true;
   bool isLoadingUserLocations = true;
+  bool isLoadingRoutes = false;
+
+  // Google API Key
+  static const String googleApiKey = "YOUR_GOOGLE_API_KEY_HERE";
 
   // Services
   final LocationService _locationService = LocationService();
+  final PolylinePoints _polylinePoints = PolylinePoints();
 
   // Connection and user data
   bool _isConnected = false;
   String? _currentUserId;
   Map<String, UserLocation> _userLocations = {};
   List<String> _roomUsers = [];
+
+  // Route display settings
+  bool _showRoutes = false;
+  String _routeMode = 'driving'; // driving, walking, transit
+  List<String> _selectedUsers = []; // Empty means show routes to all users
 
   // Stream subscriptions
   StreamSubscription<ConnectionStatus>? _connectionSubscription;
@@ -38,7 +50,7 @@ class _MapViewState extends State<MapView> {
   StreamSubscription<List<String>>? _roomUsersSubscription;
   StreamSubscription<String>? _errorSubscription;
 
-  // Color scheme for different users
+  // Color scheme for different users and routes
   final List<double> _markerHues = [
     BitmapDescriptor.hueRed,
     BitmapDescriptor.hueBlue,
@@ -50,10 +62,22 @@ class _MapViewState extends State<MapView> {
     BitmapDescriptor.hueViolet,
   ];
 
+  final List<Color> _polylineColors = [
+    Colors.red,
+    Colors.blue,
+    Colors.green,
+    Colors.orange,
+    Colors.purple,
+    Colors.cyan,
+    Colors.pink,
+    Colors.indigo,
+  ];
+
   @override
   void initState() {
     super.initState();
     _markers = <MarkerId, Marker>{};
+    _polylines = <PolylineId, Polyline>{};
 
     _setupLocationServiceListeners();
     _checkConnectionStatus();
@@ -88,6 +112,11 @@ class _MapViewState extends State<MapView> {
           isLoadingUserLocations = false;
         });
         _updateUserMarkers();
+
+        // Update routes if they're currently shown
+        if (_showRoutes && currentLocation != null) {
+          _updateRoutes();
+        }
       }
     });
 
@@ -309,7 +338,6 @@ class _MapViewState extends State<MapView> {
               "Lng: ${userLocation.longitude.toStringAsFixed(6)}\n"
               "Updated: ${_formatTimestamp(userLocation.timestamp)}",
         ),
-        onTap: () => _showUserLocationDetails(userLocation),
       );
 
       setState(() {
@@ -323,6 +351,293 @@ class _MapViewState extends State<MapView> {
     if (_userLocations.length > 1) {
       await _showAllLocations();
     }
+  }
+
+  // Get polyline points between two locations
+  Future<List<LatLng>> _getPolylinePoints(
+    LatLng origin,
+    LatLng destination,
+  ) async {
+    List<LatLng> polylineCoordinates = [];
+
+    try {
+      PolylineRequest request = PolylineRequest(
+        origin: PointLatLng(origin.latitude, origin.longitude),
+        destination: PointLatLng(destination.latitude, destination.longitude),
+        mode: _getTravelMode(),
+      );
+
+      PolylineResult result = await _polylinePoints.getRouteBetweenCoordinates(
+        googleApiKey: googleApiKey,
+        request: request,
+      );
+
+      if (result.points.isNotEmpty) {
+        result.points.forEach((PointLatLng point) {
+          polylineCoordinates.add(LatLng(point.latitude, point.longitude));
+        });
+      } else {
+        debugPrint('No route found between $origin and $destination');
+        // Fallback to direct line
+        polylineCoordinates = [origin, destination];
+      }
+    } catch (e) {
+      debugPrint('Error getting polyline points: $e');
+      // Fallback to direct line
+      polylineCoordinates = [origin, destination];
+    }
+
+    return polylineCoordinates;
+  }
+
+  TravelMode _getTravelMode() {
+    switch (_routeMode) {
+      case 'walking':
+        return TravelMode.walking;
+      case 'transit':
+        return TravelMode.transit;
+      case 'driving':
+      default:
+        return TravelMode.driving;
+    }
+  }
+
+  // Update routes between current location and other users
+  Future<void> _updateRoutes() async {
+    if (!_showRoutes || currentLocation == null || _userLocations.isEmpty) {
+      setState(() {
+        _polylines.clear();
+      });
+      return;
+    }
+
+    setState(() {
+      isLoadingRoutes = true;
+    });
+
+    Map<PolylineId, Polyline> newPolylines = {};
+    int colorIndex = 0;
+
+    try {
+      // Create routes from current location to selected users (or all users if none selected)
+      List<String> targetUsers =
+          _selectedUsers.isEmpty
+              ? _userLocations.keys
+                  .where((userId) => userId != _currentUserId)
+                  .toList()
+              : _selectedUsers;
+
+      for (String userId in targetUsers) {
+        UserLocation? userLocation = _userLocations[userId];
+        if (userLocation == null || userId == _currentUserId) continue;
+
+        LatLng destination = LatLng(
+          userLocation.latitude,
+          userLocation.longitude,
+        );
+
+        List<LatLng> polylineCoordinates = await _getPolylinePoints(
+          currentLocation!,
+          destination,
+        );
+
+        if (polylineCoordinates.isNotEmpty) {
+          PolylineId polylineId = PolylineId("route_to_$userId");
+          Polyline polyline = Polyline(
+            polylineId: polylineId,
+            points: polylineCoordinates,
+            color: _polylineColors[colorIndex % _polylineColors.length],
+            width: 4,
+            patterns:
+                _routeMode == 'walking'
+                    ? [PatternItem.dash(10), PatternItem.gap(10)]
+                    : [],
+            onTap: () => _showRouteInfo(userId, userLocation),
+          );
+
+          newPolylines[polylineId] = polyline;
+        }
+
+        colorIndex++;
+      }
+
+      setState(() {
+        _polylines = newPolylines;
+        isLoadingRoutes = false;
+      });
+    } catch (e) {
+      debugPrint('Error updating routes: $e');
+      setState(() {
+        isLoadingRoutes = false;
+      });
+      _showError('Error loading routes: $e');
+    }
+  }
+
+  void _showRouteInfo(String userId, UserLocation userLocation) {
+    double distance = _calculateDistance(
+      currentLocation!,
+      LatLng(userLocation.latitude, userLocation.longitude),
+    );
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.route, color: Colors.blue.shade600),
+                SizedBox(width: 8),
+                Text('Route to $userId'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRow('Travel Mode', _routeMode.toUpperCase()),
+                _buildInfoRow(
+                  'Direct Distance',
+                  '${distance.toStringAsFixed(2)} km',
+                ),
+                _buildInfoRow(
+                  'Destination',
+                  '${userLocation.latitude.toStringAsFixed(6)}, ${userLocation.longitude.toStringAsFixed(6)}',
+                ),
+                _buildInfoRow(
+                  'Last Updated',
+                  _formatTimestamp(userLocation.timestamp),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Close'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _focusOnUser(userLocation);
+                },
+                child: Text('Focus on Map'),
+              ),
+            ],
+          ),
+    );
+  }
+
+  void _toggleRoutes() {
+    if (googleApiKey == "YOUR_GOOGLE_API_KEY_HERE") {
+      _showError('Please add your Google API key to use route features');
+      return;
+    }
+
+    setState(() {
+      _showRoutes = !_showRoutes;
+    });
+
+    if (_showRoutes) {
+      _updateRoutes();
+    } else {
+      setState(() {
+        _polylines.clear();
+      });
+    }
+  }
+
+  void _showRoutesSettings() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Text('Route Settings'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Travel Mode:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 8),
+                ...['driving', 'walking', 'transit'].map(
+                  (mode) => RadioListTile<String>(
+                    title: Text(mode.toUpperCase()),
+                    value: mode,
+                    groupValue: _routeMode,
+                    onChanged: (value) {
+                      setState(() {
+                        _routeMode = value!;
+                      });
+                      if (_showRoutes) {
+                        _updateRoutes();
+                      }
+                    },
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Show Routes To:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 8),
+                CheckboxListTile(
+                  title: Text('All Users'),
+                  value: _selectedUsers.isEmpty,
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == true) {
+                        _selectedUsers.clear();
+                      } else {
+                        _selectedUsers =
+                            _userLocations.keys
+                                .where((userId) => userId != _currentUserId)
+                                .toList();
+                      }
+                    });
+                    if (_showRoutes) {
+                      _updateRoutes();
+                    }
+                  },
+                ),
+                ..._userLocations.keys
+                    .where((userId) => userId != _currentUserId)
+                    .map(
+                      (userId) => CheckboxListTile(
+                        title: Text(userId),
+                        value:
+                            _selectedUsers.isEmpty ||
+                            _selectedUsers.contains(userId),
+                        onChanged:
+                            _selectedUsers.isEmpty
+                                ? null
+                                : (value) {
+                                  setState(() {
+                                    if (value == true) {
+                                      if (!_selectedUsers.contains(userId)) {
+                                        _selectedUsers.add(userId);
+                                      }
+                                    } else {
+                                      _selectedUsers.remove(userId);
+                                    }
+                                  });
+                                  if (_showRoutes) {
+                                    _updateRoutes();
+                                  }
+                                },
+                      ),
+                    ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Done'),
+              ),
+            ],
+          ),
+    );
   }
 
   String _formatTimestamp(String timestamp) {
@@ -343,60 +658,6 @@ class _MapViewState extends State<MapView> {
     } catch (e) {
       return "Unknown";
     }
-  }
-
-  void _showUserLocationDetails(UserLocation userLocation) {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Row(
-              children: [
-                Icon(Icons.person, color: Colors.blue.shade600),
-                SizedBox(width: 8),
-                Text(userLocation.userId),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildInfoRow(
-                  'Latitude',
-                  userLocation.latitude.toStringAsFixed(8),
-                ),
-                _buildInfoRow(
-                  'Longitude',
-                  userLocation.longitude.toStringAsFixed(8),
-                ),
-                _buildInfoRow(
-                  'Last Updated',
-                  _formatTimestamp(userLocation.timestamp),
-                ),
-                if (currentLocation != null) ...[
-                  SizedBox(height: 8),
-                  _buildInfoRow(
-                    'Distance',
-                    '${_calculateDistance(currentLocation!, LatLng(userLocation.latitude, userLocation.longitude)).toStringAsFixed(2)} km',
-                  ),
-                ],
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text('Close'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  _focusOnUser(userLocation);
-                },
-                child: Text('Focus on Map'),
-              ),
-            ],
-          ),
-    );
   }
 
   Widget _buildInfoRow(String label, String value) {
@@ -534,87 +795,6 @@ class _MapViewState extends State<MapView> {
     });
   }
 
-  void _showConnectionInfo() {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Row(
-              children: [
-                Icon(
-                  _isConnected ? Icons.check_circle : Icons.error,
-                  color:
-                      _isConnected
-                          ? Colors.green.shade600
-                          : Colors.red.shade600,
-                ),
-                SizedBox(width: 8),
-                Text('Connection Status'),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildInfoRow(
-                  'Status',
-                  _isConnected ? 'Connected' : 'Disconnected',
-                ),
-                if (_isConnected) ...[
-                  _buildInfoRow(
-                    'Room ID',
-                    _locationService.currentRoomId ?? 'Unknown',
-                  ),
-                  _buildInfoRow('Your ID', _currentUserId ?? 'Unknown'),
-                  _buildInfoRow('Users Online', '${_roomUsers.length}'),
-                  _buildInfoRow(
-                    'Locations Received',
-                    '${_userLocations.length}',
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Users in room:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  SizedBox(height: 4),
-                  ..._roomUsers
-                      .map(
-                        (user) => Padding(
-                          padding: EdgeInsets.only(left: 8),
-                          child: Text(
-                            '• $user${user == _currentUserId ? " (You)" : ""}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color:
-                                  user == _currentUserId
-                                      ? Colors.blue.shade600
-                                      : null,
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                ],
-              ],
-            ),
-            actions: [
-              if (_isConnected)
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _refreshData();
-                  },
-                  child: Text('Refresh'),
-                ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text('Close'),
-              ),
-            ],
-          ),
-    );
-  }
-
   @override
   void dispose() {
     // Cancel stream subscriptions
@@ -635,12 +815,19 @@ class _MapViewState extends State<MapView> {
         backgroundColor: Colors.green.shade600,
         foregroundColor: Colors.white,
         actions: [
-          // Connection info
+          // Routes toggle button
           IconButton(
-            onPressed: _showConnectionInfo,
-            icon: Icon(_isConnected ? Icons.wifi : Icons.wifi_off),
-            tooltip: 'Connection Info',
+            onPressed: _userLocations.isNotEmpty ? _toggleRoutes : null,
+            icon: Icon(_showRoutes ? Icons.route : Icons.route_outlined),
+            tooltip: _showRoutes ? 'Hide Routes' : 'Show Routes',
           ),
+          // Routes settings
+          if (_showRoutes)
+            IconButton(
+              onPressed: _showRoutesSettings,
+              icon: Icon(Icons.settings),
+              tooltip: 'Route Settings',
+            ),
         ],
       ),
       body:
@@ -689,6 +876,7 @@ class _MapViewState extends State<MapView> {
                       }
                     },
                     markers: Set<Marker>.of(_markers.values),
+                    polylines: Set<Polyline>.of(_polylines.values),
                     myLocationEnabled: true,
                     myLocationButtonEnabled: true,
                     compassEnabled: true,
@@ -729,6 +917,98 @@ class _MapViewState extends State<MapView> {
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.green.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  // Routes loading indicator
+                  if (isLoadingRoutes)
+                    Positioned(
+                      top: 16,
+                      left: 16,
+                      child: Container(
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.blue.shade600,
+                              ),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Loading Routes...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blue.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  // Route info overlay
+                  if (_showRoutes && _polylines.isNotEmpty)
+                    Positioned(
+                      bottom: 100,
+                      right: 16,
+                      child: Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.route,
+                                  size: 16,
+                                  color: Colors.blue.shade600,
+                                ),
+                                SizedBox(width: 4),
+                                Text(
+                                  '${_polylines.length} Routes',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.blue.shade600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              _routeMode.toUpperCase(),
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.grey.shade600,
                               ),
                             ),
                           ],
