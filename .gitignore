@@ -47,4 +47,3 @@ app.*.map.json
 /macos
 /web
 /windows
-/lib/OPEN_ROUTE_SERVICE.dart
