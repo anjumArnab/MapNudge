@@ -4,9 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import '../OPEN_ROUTE_SERVICE.dart';
 import '../services/location_service.dart';
-import '../services/routing_service.dart';
 import '../models/user_location.dart';
 import '../models/connection_status.dart';
 
@@ -19,16 +17,13 @@ class MapView extends StatefulWidget {
 
 class _MapViewState extends State<MapView> {
   late Map<MarkerId, Marker> _markers;
-  late Map<PolylineId, Polyline> _polylines;
   final Completer<GoogleMapController> _controller = Completer();
   LatLng? currentLocation;
   bool isLoadingLocation = true;
   bool isLoadingUserLocations = true;
-  bool _isMultiPointRouteEnabled = false;
 
   // Services
   final LocationService _locationService = LocationService();
-  late RoutingService _routingService;
 
   // Connection and user data
   bool _isConnected = false;
@@ -55,25 +50,10 @@ class _MapViewState extends State<MapView> {
     BitmapDescriptor.hueViolet,
   ];
 
-  final List<Color> _polylineColors = [
-    Colors.red,
-    Colors.blue,
-    Colors.green,
-    Colors.orange,
-    Colors.purple,
-    Colors.cyan,
-    Colors.pink,
-    Colors.brown,
-  ];
-
   @override
   void initState() {
     super.initState();
     _markers = <MarkerId, Marker>{};
-    _polylines = <PolylineId, Polyline>{};
-
-    // Initialize RoutingService with OpenRoute API key
-    _routingService = RoutingService(openRouteServiceApiKey);
 
     _setupLocationServiceListeners();
     _checkConnectionStatus();
@@ -108,7 +88,6 @@ class _MapViewState extends State<MapView> {
           isLoadingUserLocations = false;
         });
         _updateUserMarkers();
-        _createRoutes();
       }
     });
 
@@ -234,9 +213,8 @@ class _MapViewState extends State<MapView> {
         );
       }
 
-      // Update user markers and routes
+      // Update user markers
       _updateUserMarkers();
-      _createRoutes();
 
       debugPrint(
         'Current location obtained: ${currentLocation!.latitude}, ${currentLocation!.longitude}',
@@ -268,7 +246,6 @@ class _MapViewState extends State<MapView> {
     }
 
     _updateUserMarkers();
-    _createRoutes();
   }
 
   Future<void> _addCurrentLocationMarker() async {
@@ -519,135 +496,6 @@ class _MapViewState extends State<MapView> {
     );
   }
 
-  Future<void> _createRoutes() async {
-    if (currentLocation == null || _userLocations.isEmpty) return;
-
-    // Clear existing polylines
-    _polylines.clear();
-
-    if (_isMultiPointRouteEnabled) {
-      await _createMultiPointRoute();
-    } else {
-      await _createIndividualRoutes();
-    }
-  }
-
-  Future<void> _createIndividualRoutes() async {
-    // Create routes from current user to all other users
-    for (var entry in _userLocations.entries) {
-      String userId = entry.key;
-      UserLocation userLocation = entry.value;
-
-      // Skip if this is the current user
-      if (userId == _currentUserId) continue;
-
-      await _createRouteToUser(userId, userLocation);
-    }
-  }
-
-  Future<void> _createRouteToUser(
-    String userId,
-    UserLocation userLocation,
-  ) async {
-    if (currentLocation == null) return;
-
-    final destination = LatLng(userLocation.latitude, userLocation.longitude);
-
-    // Get route using RoutingService
-    final routeCoordinates = await _routingService.getRoute(
-      origin: currentLocation!,
-      destination: destination,
-      profile: 'driving-car',
-    );
-
-    // Use route coordinates or fallback to straight line
-    final coordinates =
-        routeCoordinates ??
-        _routingService.getStraightLineRoute(
-          origin: currentLocation!,
-          destination: destination,
-        );
-
-    // Get color for this user
-    final colorIndex = _userLocations.keys.toList().indexOf(userId);
-    final polylineColor = _polylineColors[colorIndex % _polylineColors.length];
-
-    // Create polyline
-    final polyline = _routingService.createPolyline(
-      polylineId: "route_to_$userId",
-      coordinates: coordinates,
-      color: polylineColor,
-      width: 4,
-    );
-
-    setState(() {
-      _polylines[polyline.polylineId] = polyline;
-    });
-
-    // Log route info
-    if (routeCoordinates != null) {
-      final distance = _routingService.calculateRouteDistance(coordinates);
-      final estimatedTime = _routingService.calculateEstimatedTime(coordinates);
-      debugPrint(
-        'Route to $userId: ${distance.toStringAsFixed(2)} km, ~$estimatedTime min',
-      );
-    } else {
-      debugPrint('Using straight line for user $userId');
-    }
-  }
-
-  Future<void> _createMultiPointRoute() async {
-    if (currentLocation == null || _userLocations.isEmpty) return;
-
-    // Collect all waypoints
-    List<LatLng> waypoints = [currentLocation!];
-    for (var userLocation in _userLocations.values) {
-      if (_currentUserId != null && userLocation.userId == _currentUserId)
-        continue;
-      waypoints.add(LatLng(userLocation.latitude, userLocation.longitude));
-    }
-
-    if (waypoints.length < 2) return;
-
-    // Get multi-point route
-    final routeCoordinates = await _routingService.getMultiPointRoute(
-      waypoints: waypoints,
-      profile: 'driving-car',
-    );
-
-    if (routeCoordinates != null) {
-      final multiPointPolyline = _routingService.createPolyline(
-        polylineId: "multi_point_route",
-        coordinates: routeCoordinates,
-        color: Colors.deepPurple,
-        width: 5,
-        patterns: [PatternItem.dot, PatternItem.gap(5)],
-      );
-
-      setState(() {
-        _polylines[multiPointPolyline.polylineId] = multiPointPolyline;
-      });
-
-      final distance = _routingService.calculateRouteDistance(routeCoordinates);
-      final estimatedTime = _routingService.calculateEstimatedTime(
-        routeCoordinates,
-      );
-      debugPrint(
-        'Multi-point route: ${distance.toStringAsFixed(2)} km, ~$estimatedTime min',
-      );
-    } else {
-      // Fallback to individual routes if multi-point fails
-      await _createIndividualRoutes();
-    }
-  }
-
-  void _toggleRouteMode() {
-    setState(() {
-      _isMultiPointRouteEnabled = !_isMultiPointRouteEnabled;
-    });
-    _createRoutes();
-  }
-
   void _showError(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -723,10 +571,6 @@ class _MapViewState extends State<MapView> {
                     'Locations Received',
                     '${_userLocations.length}',
                   ),
-                  _buildInfoRow(
-                    'Route Mode',
-                    _isMultiPointRouteEnabled ? 'Multi-Point' : 'Individual',
-                  ),
                   SizedBox(height: 8),
                   Text(
                     'Users in room:',
@@ -791,17 +635,6 @@ class _MapViewState extends State<MapView> {
         backgroundColor: Colors.green.shade600,
         foregroundColor: Colors.white,
         actions: [
-          // Route mode toggle
-          IconButton(
-            onPressed: _toggleRouteMode,
-            icon: Icon(
-              _isMultiPointRouteEnabled ? Icons.route : Icons.linear_scale,
-            ),
-            tooltip:
-                _isMultiPointRouteEnabled
-                    ? 'Individual Routes'
-                    : 'Multi-Point Route',
-          ),
           // Connection info
           IconButton(
             onPressed: _showConnectionInfo,
@@ -856,79 +689,50 @@ class _MapViewState extends State<MapView> {
                       }
                     },
                     markers: Set<Marker>.of(_markers.values),
-                    polylines: Set<Polyline>.of(_polylines.values),
                     myLocationEnabled: true,
                     myLocationButtonEnabled: true,
                     compassEnabled: true,
                     mapToolbarEnabled: true,
                   ),
-                  // User count and route mode overlay
+                  // User count overlay
                   if (_isConnected && _userLocations.isNotEmpty)
                     Positioned(
                       top: 16,
                       right: 16,
-                      child: Column(
-                        children: [
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
                             ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.1),
-                                  blurRadius: 4,
-                                  offset: Offset(0, 2),
-                                ),
-                              ],
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.people,
+                              size: 16,
+                              color: Colors.green.shade600,
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.people,
-                                  size: 16,
-                                  color: Colors.green.shade600,
-                                ),
-                                SizedBox(width: 4),
-                                Text(
-                                  '${_userLocations.length + 1}',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.green.shade600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(height: 8),
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color:
-                                  _isMultiPointRouteEnabled
-                                      ? Colors.deepPurple.withOpacity(0.9)
-                                      : Colors.blue.withOpacity(0.9),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              _isMultiPointRouteEnabled
-                                  ? 'Multi'
-                                  : 'Individual',
+                            SizedBox(width: 4),
+                            Text(
+                              '${_userLocations.length + 1}',
                               style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
                                 fontWeight: FontWeight.bold,
+                                color: Colors.green.shade600,
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                 ],
@@ -964,12 +768,7 @@ class _MapViewState extends State<MapView> {
           FloatingActionButton(
             heroTag: "refresh_current_location",
             shape: CircleBorder(),
-            onPressed: () async {
-              await _getCurrentLocation();
-              if (_userLocations.isNotEmpty) {
-                await _createRoutes();
-              }
-            },
+            onPressed: _getCurrentLocation,
             backgroundColor: Colors.green.shade600,
             tooltip: 'Refresh My Location',
             child: Icon(Icons.my_location, color: Colors.white),
