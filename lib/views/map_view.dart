@@ -4,9 +4,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter_polyline_points/flutter_polyline_points.dart';
-import 'package:map_nudge/OPEN_ROUTE_SERVICE.dart';
+import '../OPEN_ROUTE_SERVICE.dart';
 import '../services/location_service.dart';
+import '../services/routing_service.dart';
 import '../models/user_location.dart';
 import '../models/connection_status.dart';
 
@@ -22,12 +22,13 @@ class _MapViewState extends State<MapView> {
   late Map<PolylineId, Polyline> _polylines;
   final Completer<GoogleMapController> _controller = Completer();
   LatLng? currentLocation;
-  PolylinePoints polylinePoints = PolylinePoints();
   bool isLoadingLocation = true;
   bool isLoadingUserLocations = true;
+  bool _isMultiPointRouteEnabled = false;
 
-  // LocationService instance
+  // Services
   final LocationService _locationService = LocationService();
+  late RoutingService _routingService;
 
   // Connection and user data
   bool _isConnected = false;
@@ -54,11 +55,26 @@ class _MapViewState extends State<MapView> {
     BitmapDescriptor.hueViolet,
   ];
 
+  final List<Color> _polylineColors = [
+    Colors.red,
+    Colors.blue,
+    Colors.green,
+    Colors.orange,
+    Colors.purple,
+    Colors.cyan,
+    Colors.pink,
+    Colors.brown,
+  ];
+
   @override
   void initState() {
     super.initState();
     _markers = <MarkerId, Marker>{};
     _polylines = <PolylineId, Polyline>{};
+
+    // Initialize RoutingService with OpenRoute API key
+    _routingService = RoutingService(openRouteServiceApiKey);
+
     _setupLocationServiceListeners();
     _checkConnectionStatus();
     _getCurrentLocation();
@@ -92,7 +108,7 @@ class _MapViewState extends State<MapView> {
           isLoadingUserLocations = false;
         });
         _updateUserMarkers();
-        _createPolylinesFromCurrentUser();
+        _createRoutes();
       }
     });
 
@@ -167,7 +183,7 @@ class _MapViewState extends State<MapView> {
       // Check if location services are enabled
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        print('Location services are disabled.');
+        debugPrint('Location services are disabled.');
         _showError('Location services are disabled. Using default location.');
         await _setDefaultLocation();
         return;
@@ -178,7 +194,7 @@ class _MapViewState extends State<MapView> {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          print('Location permissions are denied');
+          debugPrint('Location permissions are denied');
           _showError('Location permission denied. Using default location.');
           await _setDefaultLocation();
           return;
@@ -186,7 +202,7 @@ class _MapViewState extends State<MapView> {
       }
 
       if (permission == LocationPermission.deniedForever) {
-        print('Location permissions are permanently denied.');
+        debugPrint('Location permissions are permanently denied.');
         _showError(
           'Location permission permanently denied. Using default location.',
         );
@@ -218,15 +234,15 @@ class _MapViewState extends State<MapView> {
         );
       }
 
-      // Update user markers and polylines
+      // Update user markers and routes
       _updateUserMarkers();
-      _createPolylinesFromCurrentUser();
+      _createRoutes();
 
-      print(
+      debugPrint(
         'Current location obtained: ${currentLocation!.latitude}, ${currentLocation!.longitude}',
       );
     } catch (e) {
-      print('Error getting current location: $e');
+      debugPrint('Error getting current location: $e');
       _showError(
         'Error getting location: ${e.toString()}. Using default location.',
       );
@@ -252,7 +268,7 @@ class _MapViewState extends State<MapView> {
     }
 
     _updateUserMarkers();
-    _createPolylinesFromCurrentUser();
+    _createRoutes();
   }
 
   Future<void> _addCurrentLocationMarker() async {
@@ -503,13 +519,21 @@ class _MapViewState extends State<MapView> {
     );
   }
 
-  Future<void> _createPolylinesFromCurrentUser() async {
+  Future<void> _createRoutes() async {
     if (currentLocation == null || _userLocations.isEmpty) return;
 
     // Clear existing polylines
     _polylines.clear();
 
-    // Create polylines from current user to all other users
+    if (_isMultiPointRouteEnabled) {
+      await _createMultiPointRoute();
+    } else {
+      await _createIndividualRoutes();
+    }
+  }
+
+  Future<void> _createIndividualRoutes() async {
+    // Create routes from current user to all other users
     for (var entry in _userLocations.entries) {
       String userId = entry.key;
       UserLocation userLocation = entry.value;
@@ -517,82 +541,111 @@ class _MapViewState extends State<MapView> {
       // Skip if this is the current user
       if (userId == _currentUserId) continue;
 
-      await _createPolylineToUser(userId, userLocation);
+      await _createRouteToUser(userId, userLocation);
     }
   }
 
-  Future<void> _createPolylineToUser(
+  Future<void> _createRouteToUser(
     String userId,
     UserLocation userLocation,
   ) async {
     if (currentLocation == null) return;
 
-    List<LatLng> polylineCoordinates = [];
-    LatLng destination = LatLng(userLocation.latitude, userLocation.longitude);
+    final destination = LatLng(userLocation.latitude, userLocation.longitude);
 
-    try {
-      // For now, use a simple straight line
-      polylineCoordinates.add(currentLocation!);
-      polylineCoordinates.add(destination);
+    // Get route using RoutingService
+    final routeCoordinates = await _routingService.getRoute(
+      origin: currentLocation!,
+      destination: destination,
+      profile: 'driving-car',
+    );
 
-      PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-        googleApiKey: openRouteServiceApiKey,
-        request: PolylineRequest(
-          origin: PointLatLng(
-            currentLocation!.latitude,
-            currentLocation!.longitude,
-          ),
-          destination: PointLatLng(destination.latitude, destination.longitude),
-          mode: TravelMode.driving,
-        ),
-      );
+    // Use route coordinates or fallback to straight line
+    final coordinates =
+        routeCoordinates ??
+        _routingService.getStraightLineRoute(
+          origin: currentLocation!,
+          destination: destination,
+        );
 
-      if (result.points.isNotEmpty) {
-        polylineCoordinates.clear();
-        for (var point in result.points) {
-          polylineCoordinates.add(LatLng(point.latitude, point.longitude));
-        }
-      } else {
-        // Fallback to straight line
-        polylineCoordinates.clear();
-        polylineCoordinates.add(currentLocation!);
-        polylineCoordinates.add(destination);
-      }
-    } catch (e) {
-      print('Error creating polyline to $userId: $e');
-      // Fallback to straight line
-      polylineCoordinates.clear();
-      polylineCoordinates.add(currentLocation!);
-      polylineCoordinates.add(destination);
-    }
+    // Get color for this user
+    final colorIndex = _userLocations.keys.toList().indexOf(userId);
+    final polylineColor = _polylineColors[colorIndex % _polylineColors.length];
 
-    // Use different colors for different polylines
-    List<Color> polylineColors = [
-      Colors.red,
-      Colors.blue,
-      Colors.green,
-      Colors.orange,
-      Colors.purple,
-      Colors.cyan,
-      Colors.pink,
-      Colors.brown,
-    ];
-
-    int colorIndex = _userLocations.keys.toList().indexOf(userId);
-    Color polylineColor = polylineColors[colorIndex % polylineColors.length];
-
-    PolylineId polylineId = PolylineId("route_to_$userId");
-    Polyline polyline = Polyline(
-      polylineId: polylineId,
+    // Create polyline
+    final polyline = _routingService.createPolyline(
+      polylineId: "route_to_$userId",
+      coordinates: coordinates,
       color: polylineColor,
-      points: polylineCoordinates,
-      width: 3,
-      patterns: [PatternItem.dash(15), PatternItem.gap(8)],
+      width: 4,
     );
 
     setState(() {
-      _polylines[polylineId] = polyline;
+      _polylines[polyline.polylineId] = polyline;
     });
+
+    // Log route info
+    if (routeCoordinates != null) {
+      final distance = _routingService.calculateRouteDistance(coordinates);
+      final estimatedTime = _routingService.calculateEstimatedTime(coordinates);
+      debugPrint(
+        'Route to $userId: ${distance.toStringAsFixed(2)} km, ~$estimatedTime min',
+      );
+    } else {
+      debugPrint('Using straight line for user $userId');
+    }
+  }
+
+  Future<void> _createMultiPointRoute() async {
+    if (currentLocation == null || _userLocations.isEmpty) return;
+
+    // Collect all waypoints
+    List<LatLng> waypoints = [currentLocation!];
+    for (var userLocation in _userLocations.values) {
+      if (_currentUserId != null && userLocation.userId == _currentUserId)
+        continue;
+      waypoints.add(LatLng(userLocation.latitude, userLocation.longitude));
+    }
+
+    if (waypoints.length < 2) return;
+
+    // Get multi-point route
+    final routeCoordinates = await _routingService.getMultiPointRoute(
+      waypoints: waypoints,
+      profile: 'driving-car',
+    );
+
+    if (routeCoordinates != null) {
+      final multiPointPolyline = _routingService.createPolyline(
+        polylineId: "multi_point_route",
+        coordinates: routeCoordinates,
+        color: Colors.deepPurple,
+        width: 5,
+        patterns: [PatternItem.dot, PatternItem.gap(5)],
+      );
+
+      setState(() {
+        _polylines[multiPointPolyline.polylineId] = multiPointPolyline;
+      });
+
+      final distance = _routingService.calculateRouteDistance(routeCoordinates);
+      final estimatedTime = _routingService.calculateEstimatedTime(
+        routeCoordinates,
+      );
+      debugPrint(
+        'Multi-point route: ${distance.toStringAsFixed(2)} km, ~$estimatedTime min',
+      );
+    } else {
+      // Fallback to individual routes if multi-point fails
+      await _createIndividualRoutes();
+    }
+  }
+
+  void _toggleRouteMode() {
+    setState(() {
+      _isMultiPointRouteEnabled = !_isMultiPointRouteEnabled;
+    });
+    _createRoutes();
   }
 
   void _showError(String message) {
@@ -670,6 +723,10 @@ class _MapViewState extends State<MapView> {
                     'Locations Received',
                     '${_userLocations.length}',
                   ),
+                  _buildInfoRow(
+                    'Route Mode',
+                    _isMultiPointRouteEnabled ? 'Multi-Point' : 'Individual',
+                  ),
                   SizedBox(height: 8),
                   Text(
                     'Users in room:',
@@ -734,6 +791,17 @@ class _MapViewState extends State<MapView> {
         backgroundColor: Colors.green.shade600,
         foregroundColor: Colors.white,
         actions: [
+          // Route mode toggle
+          IconButton(
+            onPressed: _toggleRouteMode,
+            icon: Icon(
+              _isMultiPointRouteEnabled ? Icons.route : Icons.linear_scale,
+            ),
+            tooltip:
+                _isMultiPointRouteEnabled
+                    ? 'Individual Routes'
+                    : 'Multi-Point Route',
+          ),
           // Connection info
           IconButton(
             onPressed: _showConnectionInfo,
@@ -794,45 +862,73 @@ class _MapViewState extends State<MapView> {
                     compassEnabled: true,
                     mapToolbarEnabled: true,
                   ),
-                  // User count overlay
+                  // User count and route mode overlay
                   if (_isConnected && _userLocations.isNotEmpty)
                     Positioned(
                       top: 16,
                       right: 16,
-                      child: Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 4,
-                              offset: Offset(0, 2),
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
                             ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.people,
-                              size: 16,
-                              color: Colors.green.shade600,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.1),
+                                  blurRadius: 4,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
-                            SizedBox(width: 4),
-                            Text(
-                              '${_userLocations.length + 1}', // +1 for current user
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.people,
+                                  size: 16,
+                                  color: Colors.green.shade600,
+                                ),
+                                SizedBox(width: 4),
+                                Text(
+                                  '${_userLocations.length + 1}',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green.shade600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color:
+                                  _isMultiPointRouteEnabled
+                                      ? Colors.deepPurple.withOpacity(0.9)
+                                      : Colors.blue.withOpacity(0.9),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              _isMultiPointRouteEnabled
+                                  ? 'Multi'
+                                  : 'Individual',
                               style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.green.shade600,
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
                 ],
@@ -871,7 +967,7 @@ class _MapViewState extends State<MapView> {
             onPressed: () async {
               await _getCurrentLocation();
               if (_userLocations.isNotEmpty) {
-                await _createPolylinesFromCurrentUser();
+                await _createRoutes();
               }
             },
             backgroundColor: Colors.green.shade600,
